@@ -20,8 +20,6 @@ type Interface interface {
 	GlobalRolesGetter
 	GlobalRoleBindingsGetter
 	RoleTemplatesGetter
-	PodSecurityPolicyTemplatesGetter
-	PodSecurityPolicyTemplateProjectBindingsGetter
 	ClusterRoleTemplateBindingsGetter
 	ProjectRoleTemplateBindingsGetter
 	ClustersGetter
@@ -46,25 +44,13 @@ type Interface interface {
 	ProjectNetworkPoliciesGetter
 	SettingsGetter
 	FeaturesGetter
-	ClusterAlertsGetter
-	ProjectAlertsGetter
-	NotifiersGetter
-	ClusterAlertGroupsGetter
-	ProjectAlertGroupsGetter
-	ClusterAlertRulesGetter
-	ProjectAlertRulesGetter
 	ComposeConfigsGetter
 	ProjectCatalogsGetter
 	ClusterCatalogsGetter
 	MultiClusterAppsGetter
 	MultiClusterAppRevisionsGetter
-	GlobalDnsesGetter
-	GlobalDnsProvidersGetter
 	KontainerDriversGetter
 	EtcdBackupsGetter
-	MonitorMetricsGetter
-	ClusterMonitorGraphsGetter
-	ProjectMonitorGraphsGetter
 	CloudCredentialsGetter
 	ClusterTemplatesGetter
 	ClusterTemplateRevisionsGetter
@@ -92,14 +78,21 @@ func NewForConfig(cfg rest.Config) (Interface, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewFromControllerFactory(controllerFactory)
+	return NewFromControllerFactory(controllerFactory), nil
 }
 
-func NewFromControllerFactory(factory controller.SharedControllerFactory) (Interface, error) {
+func NewFromControllerFactory(factory controller.SharedControllerFactory) Interface {
 	return &Client{
 		controllerFactory: factory,
 		clientFactory:     factory.SharedCacheFactory().SharedClientFactory(),
-	}, nil
+	}
+}
+
+func NewFromControllerFactoryWithAgent(userAgent string, factory controller.SharedControllerFactory) Interface {
+	return &Client{
+		controllerFactory: factory,
+		clientFactory:     client.NewSharedClientFactoryWithAgent(userAgent, factory.SharedCacheFactory().SharedClientFactory()),
+	}
 }
 
 type NodePoolsGetter interface {
@@ -222,34 +215,6 @@ func (c *Client) RoleTemplates(namespace string) RoleTemplateInterface {
 	sharedClient := c.clientFactory.ForResourceKind(RoleTemplateGroupVersionResource, RoleTemplateGroupVersionKind.Kind, false)
 	objectClient := objectclient.NewObjectClient(namespace, sharedClient, &RoleTemplateResource, RoleTemplateGroupVersionKind, roleTemplateFactory{})
 	return &roleTemplateClient{
-		ns:           namespace,
-		client:       c,
-		objectClient: objectClient,
-	}
-}
-
-type PodSecurityPolicyTemplatesGetter interface {
-	PodSecurityPolicyTemplates(namespace string) PodSecurityPolicyTemplateInterface
-}
-
-func (c *Client) PodSecurityPolicyTemplates(namespace string) PodSecurityPolicyTemplateInterface {
-	sharedClient := c.clientFactory.ForResourceKind(PodSecurityPolicyTemplateGroupVersionResource, PodSecurityPolicyTemplateGroupVersionKind.Kind, false)
-	objectClient := objectclient.NewObjectClient(namespace, sharedClient, &PodSecurityPolicyTemplateResource, PodSecurityPolicyTemplateGroupVersionKind, podSecurityPolicyTemplateFactory{})
-	return &podSecurityPolicyTemplateClient{
-		ns:           namespace,
-		client:       c,
-		objectClient: objectClient,
-	}
-}
-
-type PodSecurityPolicyTemplateProjectBindingsGetter interface {
-	PodSecurityPolicyTemplateProjectBindings(namespace string) PodSecurityPolicyTemplateProjectBindingInterface
-}
-
-func (c *Client) PodSecurityPolicyTemplateProjectBindings(namespace string) PodSecurityPolicyTemplateProjectBindingInterface {
-	sharedClient := c.clientFactory.ForResourceKind(PodSecurityPolicyTemplateProjectBindingGroupVersionResource, PodSecurityPolicyTemplateProjectBindingGroupVersionKind.Kind, true)
-	objectClient := objectclient.NewObjectClient(namespace, sharedClient, &PodSecurityPolicyTemplateProjectBindingResource, PodSecurityPolicyTemplateProjectBindingGroupVersionKind, podSecurityPolicyTemplateProjectBindingFactory{})
-	return &podSecurityPolicyTemplateProjectBindingClient{
 		ns:           namespace,
 		client:       c,
 		objectClient: objectClient,
@@ -592,104 +557,6 @@ func (c *Client) Features(namespace string) FeatureInterface {
 	}
 }
 
-type ClusterAlertsGetter interface {
-	ClusterAlerts(namespace string) ClusterAlertInterface
-}
-
-func (c *Client) ClusterAlerts(namespace string) ClusterAlertInterface {
-	sharedClient := c.clientFactory.ForResourceKind(ClusterAlertGroupVersionResource, ClusterAlertGroupVersionKind.Kind, true)
-	objectClient := objectclient.NewObjectClient(namespace, sharedClient, &ClusterAlertResource, ClusterAlertGroupVersionKind, clusterAlertFactory{})
-	return &clusterAlertClient{
-		ns:           namespace,
-		client:       c,
-		objectClient: objectClient,
-	}
-}
-
-type ProjectAlertsGetter interface {
-	ProjectAlerts(namespace string) ProjectAlertInterface
-}
-
-func (c *Client) ProjectAlerts(namespace string) ProjectAlertInterface {
-	sharedClient := c.clientFactory.ForResourceKind(ProjectAlertGroupVersionResource, ProjectAlertGroupVersionKind.Kind, true)
-	objectClient := objectclient.NewObjectClient(namespace, sharedClient, &ProjectAlertResource, ProjectAlertGroupVersionKind, projectAlertFactory{})
-	return &projectAlertClient{
-		ns:           namespace,
-		client:       c,
-		objectClient: objectClient,
-	}
-}
-
-type NotifiersGetter interface {
-	Notifiers(namespace string) NotifierInterface
-}
-
-func (c *Client) Notifiers(namespace string) NotifierInterface {
-	sharedClient := c.clientFactory.ForResourceKind(NotifierGroupVersionResource, NotifierGroupVersionKind.Kind, true)
-	objectClient := objectclient.NewObjectClient(namespace, sharedClient, &NotifierResource, NotifierGroupVersionKind, notifierFactory{})
-	return &notifierClient{
-		ns:           namespace,
-		client:       c,
-		objectClient: objectClient,
-	}
-}
-
-type ClusterAlertGroupsGetter interface {
-	ClusterAlertGroups(namespace string) ClusterAlertGroupInterface
-}
-
-func (c *Client) ClusterAlertGroups(namespace string) ClusterAlertGroupInterface {
-	sharedClient := c.clientFactory.ForResourceKind(ClusterAlertGroupGroupVersionResource, ClusterAlertGroupGroupVersionKind.Kind, true)
-	objectClient := objectclient.NewObjectClient(namespace, sharedClient, &ClusterAlertGroupResource, ClusterAlertGroupGroupVersionKind, clusterAlertGroupFactory{})
-	return &clusterAlertGroupClient{
-		ns:           namespace,
-		client:       c,
-		objectClient: objectClient,
-	}
-}
-
-type ProjectAlertGroupsGetter interface {
-	ProjectAlertGroups(namespace string) ProjectAlertGroupInterface
-}
-
-func (c *Client) ProjectAlertGroups(namespace string) ProjectAlertGroupInterface {
-	sharedClient := c.clientFactory.ForResourceKind(ProjectAlertGroupGroupVersionResource, ProjectAlertGroupGroupVersionKind.Kind, true)
-	objectClient := objectclient.NewObjectClient(namespace, sharedClient, &ProjectAlertGroupResource, ProjectAlertGroupGroupVersionKind, projectAlertGroupFactory{})
-	return &projectAlertGroupClient{
-		ns:           namespace,
-		client:       c,
-		objectClient: objectClient,
-	}
-}
-
-type ClusterAlertRulesGetter interface {
-	ClusterAlertRules(namespace string) ClusterAlertRuleInterface
-}
-
-func (c *Client) ClusterAlertRules(namespace string) ClusterAlertRuleInterface {
-	sharedClient := c.clientFactory.ForResourceKind(ClusterAlertRuleGroupVersionResource, ClusterAlertRuleGroupVersionKind.Kind, true)
-	objectClient := objectclient.NewObjectClient(namespace, sharedClient, &ClusterAlertRuleResource, ClusterAlertRuleGroupVersionKind, clusterAlertRuleFactory{})
-	return &clusterAlertRuleClient{
-		ns:           namespace,
-		client:       c,
-		objectClient: objectClient,
-	}
-}
-
-type ProjectAlertRulesGetter interface {
-	ProjectAlertRules(namespace string) ProjectAlertRuleInterface
-}
-
-func (c *Client) ProjectAlertRules(namespace string) ProjectAlertRuleInterface {
-	sharedClient := c.clientFactory.ForResourceKind(ProjectAlertRuleGroupVersionResource, ProjectAlertRuleGroupVersionKind.Kind, true)
-	objectClient := objectclient.NewObjectClient(namespace, sharedClient, &ProjectAlertRuleResource, ProjectAlertRuleGroupVersionKind, projectAlertRuleFactory{})
-	return &projectAlertRuleClient{
-		ns:           namespace,
-		client:       c,
-		objectClient: objectClient,
-	}
-}
-
 type ComposeConfigsGetter interface {
 	ComposeConfigs(namespace string) ComposeConfigInterface
 }
@@ -760,34 +627,6 @@ func (c *Client) MultiClusterAppRevisions(namespace string) MultiClusterAppRevis
 	}
 }
 
-type GlobalDnsesGetter interface {
-	GlobalDnses(namespace string) GlobalDnsInterface
-}
-
-func (c *Client) GlobalDnses(namespace string) GlobalDnsInterface {
-	sharedClient := c.clientFactory.ForResourceKind(GlobalDnsGroupVersionResource, GlobalDnsGroupVersionKind.Kind, true)
-	objectClient := objectclient.NewObjectClient(namespace, sharedClient, &GlobalDnsResource, GlobalDnsGroupVersionKind, globalDnsFactory{})
-	return &globalDnsClient{
-		ns:           namespace,
-		client:       c,
-		objectClient: objectClient,
-	}
-}
-
-type GlobalDnsProvidersGetter interface {
-	GlobalDnsProviders(namespace string) GlobalDnsProviderInterface
-}
-
-func (c *Client) GlobalDnsProviders(namespace string) GlobalDnsProviderInterface {
-	sharedClient := c.clientFactory.ForResourceKind(GlobalDnsProviderGroupVersionResource, GlobalDnsProviderGroupVersionKind.Kind, true)
-	objectClient := objectclient.NewObjectClient(namespace, sharedClient, &GlobalDnsProviderResource, GlobalDnsProviderGroupVersionKind, globalDnsProviderFactory{})
-	return &globalDnsProviderClient{
-		ns:           namespace,
-		client:       c,
-		objectClient: objectClient,
-	}
-}
-
 type KontainerDriversGetter interface {
 	KontainerDrivers(namespace string) KontainerDriverInterface
 }
@@ -810,48 +649,6 @@ func (c *Client) EtcdBackups(namespace string) EtcdBackupInterface {
 	sharedClient := c.clientFactory.ForResourceKind(EtcdBackupGroupVersionResource, EtcdBackupGroupVersionKind.Kind, true)
 	objectClient := objectclient.NewObjectClient(namespace, sharedClient, &EtcdBackupResource, EtcdBackupGroupVersionKind, etcdBackupFactory{})
 	return &etcdBackupClient{
-		ns:           namespace,
-		client:       c,
-		objectClient: objectClient,
-	}
-}
-
-type MonitorMetricsGetter interface {
-	MonitorMetrics(namespace string) MonitorMetricInterface
-}
-
-func (c *Client) MonitorMetrics(namespace string) MonitorMetricInterface {
-	sharedClient := c.clientFactory.ForResourceKind(MonitorMetricGroupVersionResource, MonitorMetricGroupVersionKind.Kind, true)
-	objectClient := objectclient.NewObjectClient(namespace, sharedClient, &MonitorMetricResource, MonitorMetricGroupVersionKind, monitorMetricFactory{})
-	return &monitorMetricClient{
-		ns:           namespace,
-		client:       c,
-		objectClient: objectClient,
-	}
-}
-
-type ClusterMonitorGraphsGetter interface {
-	ClusterMonitorGraphs(namespace string) ClusterMonitorGraphInterface
-}
-
-func (c *Client) ClusterMonitorGraphs(namespace string) ClusterMonitorGraphInterface {
-	sharedClient := c.clientFactory.ForResourceKind(ClusterMonitorGraphGroupVersionResource, ClusterMonitorGraphGroupVersionKind.Kind, true)
-	objectClient := objectclient.NewObjectClient(namespace, sharedClient, &ClusterMonitorGraphResource, ClusterMonitorGraphGroupVersionKind, clusterMonitorGraphFactory{})
-	return &clusterMonitorGraphClient{
-		ns:           namespace,
-		client:       c,
-		objectClient: objectClient,
-	}
-}
-
-type ProjectMonitorGraphsGetter interface {
-	ProjectMonitorGraphs(namespace string) ProjectMonitorGraphInterface
-}
-
-func (c *Client) ProjectMonitorGraphs(namespace string) ProjectMonitorGraphInterface {
-	sharedClient := c.clientFactory.ForResourceKind(ProjectMonitorGraphGroupVersionResource, ProjectMonitorGraphGroupVersionKind.Kind, true)
-	objectClient := objectclient.NewObjectClient(namespace, sharedClient, &ProjectMonitorGraphResource, ProjectMonitorGraphGroupVersionKind, projectMonitorGraphFactory{})
-	return &projectMonitorGraphClient{
 		ns:           namespace,
 		client:       c,
 		objectClient: objectClient,

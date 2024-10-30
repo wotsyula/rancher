@@ -3,13 +3,12 @@ package rbac
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"strings"
 
 	"github.com/pkg/errors"
 	"github.com/rancher/norman/objectclient"
 	"github.com/rancher/norman/types/convert"
-	"github.com/rancher/norman/types/slice"
+	wranglerv3 "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
 	"github.com/rancher/rancher/pkg/controllers/managementuser/resourcequota"
 	typescorev1 "github.com/rancher/rancher/pkg/generated/norman/core/v1"
 	v3 "github.com/rancher/rancher/pkg/generated/norman/management.cattle.io/v3"
@@ -17,8 +16,10 @@ import (
 	nsutils "github.com/rancher/rancher/pkg/namespace"
 	pkgrbac "github.com/rancher/rancher/pkg/rbac"
 	"github.com/rancher/rancher/pkg/types/config"
+	"github.com/rancher/wrangler/v3/pkg/relatedresource"
 	"github.com/sirupsen/logrus"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -43,6 +44,7 @@ const (
 	crbByRoleAndSubjectIndex         = "authz.cluster.cattle.io/crb-by-role-and-subject"
 	rtbLabelUpdated                  = "authz.cluster.cattle.io/rtb-label-updated"
 	rtbCrbRbLabelsUpdated            = "authz.cluster.cattle.io/crb-rb-labels-updated"
+	rtByInheritedRTsIndex            = "authz.cluster.cattle.io/rts-by-inherited-rts"
 	impersonationLabel               = "authz.cluster.cattle.io/impersonator"
 
 	rolesCircularSoftLimit = 100
@@ -50,6 +52,8 @@ const (
 )
 
 func Register(ctx context.Context, workload *config.UserContext) {
+	management := workload.Management.WithAgent("rbac-handler-base")
+
 	// Add cache informer to project role template bindings
 	prtbInformer := workload.Management.Management.ProjectRoleTemplateBindings("").Controller().Informer()
 	crtbInformer := workload.Management.Management.ClusterRoleTemplateBindings("").Controller().Informer()
@@ -75,6 +79,13 @@ func Register(ctx context.Context, workload *config.UserContext) {
 	}
 	crbInformer.AddIndexers(crbIndexers)
 
+	// Get RoleTemplates by RoleTemplate they inherit from
+	rtInformer := workload.Management.Wrangler.Mgmt.RoleTemplate().Informer()
+	rtIndexers := map[string]cache.IndexFunc{
+		rtByInheritedRTsIndex: rtByInterhitedRTs,
+	}
+	rtInformer.AddIndexers(rtIndexers)
+
 	r := &manager{
 		workload:            workload,
 		prtbIndexer:         prtbInformer.GetIndexer(),
@@ -82,32 +93,27 @@ func Register(ctx context.Context, workload *config.UserContext) {
 		nsIndexer:           nsInformer.GetIndexer(),
 		crIndexer:           crInformer.GetIndexer(),
 		crbIndexer:          crbInformer.GetIndexer(),
-		rtLister:            workload.Management.Management.RoleTemplates("").Controller().Lister(),
-		rLister:             workload.Management.RBAC.Roles("").Controller().Lister(),
-		roles:               workload.Management.RBAC.Roles(""),
+		rtLister:            management.Management.RoleTemplates("").Controller().Lister(),
 		rbLister:            workload.RBAC.RoleBindings("").Controller().Lister(),
 		crbLister:           workload.RBAC.ClusterRoleBindings("").Controller().Lister(),
 		crLister:            workload.RBAC.ClusterRoles("").Controller().Lister(),
 		clusterRoles:        workload.RBAC.ClusterRoles(""),
 		clusterRoleBindings: workload.RBAC.ClusterRoleBindings(""),
-		roleBindings:        workload.RBAC.RoleBindings(""),
 		nsLister:            workload.Core.Namespaces("").Controller().Lister(),
 		nsController:        workload.Core.Namespaces("").Controller(),
-		clusterLister:       workload.Management.Management.Clusters("").Controller().Lister(),
-		projectLister:       workload.Management.Management.Projects(workload.ClusterName).Controller().Lister(),
-		userLister:          workload.Management.Management.Users("").Controller().Lister(),
-		userAttributeLister: workload.Management.Management.UserAttributes("").Controller().Lister(),
-		crtbs:               workload.Management.Management.ClusterRoleTemplateBindings(""),
-		prtbs:               workload.Management.Management.ProjectRoleTemplateBindings(""),
+		clusterLister:       management.Management.Clusters("").Controller().Lister(),
+		projectLister:       management.Management.Projects(workload.ClusterName).Controller().Lister(),
+		userLister:          management.Management.Users("").Controller().Lister(),
+		userAttributeLister: management.Management.UserAttributes("").Controller().Lister(),
 		clusterName:         workload.ClusterName,
 	}
-	workload.Management.Management.Projects(workload.ClusterName).AddClusterScopedLifecycle(ctx, "project-namespace-auth", workload.ClusterName, newProjectLifecycle(r))
-	workload.Management.Management.ProjectRoleTemplateBindings("").AddClusterScopedLifecycle(ctx, "cluster-prtb-sync", workload.ClusterName, newPRTBLifecycle(r))
+	management.Management.Projects(workload.ClusterName).AddClusterScopedLifecycle(ctx, "project-namespace-auth", workload.ClusterName, newProjectLifecycle(r))
+	management.Management.ProjectRoleTemplateBindings("").AddClusterScopedLifecycle(ctx, "cluster-prtb-sync", workload.ClusterName, newPRTBLifecycle(r, management, nsInformer))
 	workload.RBAC.ClusterRoles("").AddHandler(ctx, "cluster-clusterrole-sync", newClusterRoleHandler(r).sync)
 	workload.RBAC.ClusterRoleBindings("").AddHandler(ctx, "legacy-crb-cleaner-sync", newLegacyCRBCleaner(r).sync)
-	workload.Management.Management.ClusterRoleTemplateBindings("").AddClusterScopedLifecycle(ctx, "cluster-crtb-sync", workload.ClusterName, newCRTBLifecycle(r))
-	workload.Management.Management.Clusters("").AddHandler(ctx, "global-admin-cluster-sync", newClusterHandler(workload))
-	workload.Management.Management.GlobalRoleBindings("").AddHandler(ctx, "grb-cluster-sync", newGlobalRoleBindingHandler(workload))
+	management.Management.ClusterRoleTemplateBindings("").AddClusterScopedLifecycle(ctx, "cluster-crtb-sync", workload.ClusterName, newCRTBLifecycle(r, management))
+	management.Management.Clusters("").AddHandler(ctx, "global-admin-cluster-sync", newClusterHandler(workload))
+	management.Management.GlobalRoleBindings("").AddHandler(ctx, grbHandlerName, newGlobalRoleBindingHandler(workload))
 
 	sync := &resourcequota.SyncController{
 		Namespaces:          workload.Core.Namespaces(""),
@@ -116,11 +122,25 @@ func Register(ctx context.Context, workload *config.UserContext) {
 		ResourceQuotaLister: workload.Core.ResourceQuotas("").Controller().Lister(),
 		LimitRange:          workload.Core.LimitRanges(""),
 		LimitRangeLister:    workload.Core.LimitRanges("").Controller().Lister(),
-		ProjectLister:       workload.Management.Management.Projects(workload.ClusterName).Controller().Lister(),
+		ProjectLister:       management.Management.Projects(workload.ClusterName).Controller().Lister(),
 	}
 
 	workload.Core.Namespaces("").AddLifecycle(ctx, "namespace-auth", newNamespaceLifecycle(r, sync))
-	workload.Management.Management.RoleTemplates("").AddHandler(ctx, "cluster-roletemplate-sync", newRTLifecycle(r))
+	management.Management.RoleTemplates("").AddHandler(ctx, "cluster-roletemplate-sync", newRTLifecycle(r))
+	relatedresource.WatchClusterScoped(ctx, "enqueue-beneficiary-roletemplates", newRTEnqueueFunc(rtInformer.GetIndexer()),
+		management.Wrangler.Mgmt.RoleTemplate(), management.Wrangler.Mgmt.RoleTemplate())
+}
+
+type managerInterface interface {
+	gatherRoles(*v3.RoleTemplate, map[string]*v3.RoleTemplate, int) error
+	ensureRoles(map[string]*v3.RoleTemplate) error
+	ensureClusterBindings(map[string]*v3.RoleTemplate, *v3.ClusterRoleTemplateBinding) error
+	ensureProjectRoleBindings(string, map[string]*v3.RoleTemplate, *v3.ProjectRoleTemplateBinding) error
+	ensureServiceAccountImpersonator(string) error
+	deleteServiceAccountImpersonator(string) error
+	ensureGlobalResourcesRolesForPRTB(string, map[string]*v3.RoleTemplate) ([]string, error)
+	reconcileProjectAccessToGlobalResources(*v3.ProjectRoleTemplateBinding, []string) (map[string]bool, error)
+	noRemainingOwnerLabels(*rbacv1.ClusterRoleBinding) (bool, error)
 }
 
 type manager struct {
@@ -136,17 +156,12 @@ type manager struct {
 	crbLister           typesrbacv1.ClusterRoleBindingLister
 	clusterRoleBindings typesrbacv1.ClusterRoleBindingInterface
 	rbLister            typesrbacv1.RoleBindingLister
-	roleBindings        typesrbacv1.RoleBindingInterface
-	rLister             typesrbacv1.RoleLister
-	roles               typesrbacv1.RoleInterface
 	nsLister            typescorev1.NamespaceLister
 	nsController        typescorev1.NamespaceController
 	clusterLister       v3.ClusterLister
 	projectLister       v3.ProjectLister
 	userLister          v3.UserLister
 	userAttributeLister v3.UserAttributeLister
-	crtbs               v3.ClusterRoleTemplateBindingInterface
-	prtbs               v3.ProjectRoleTemplateBindingInterface
 	clusterName         string
 }
 
@@ -156,9 +171,6 @@ func (m *manager) ensureRoles(rts map[string]*v3.RoleTemplate) error {
 			continue
 		}
 		if err := m.ensureClusterRoles(rt); err != nil {
-			return err
-		}
-		if err := m.ensureNamespacedRoles(rt); err != nil {
 			return err
 		}
 	}
@@ -186,7 +198,7 @@ func (m *manager) ensureClusterRoles(rt *v3.RoleTemplate) error {
 }
 
 func (m *manager) compareAndUpdateClusterRole(clusterRole *rbacv1.ClusterRole, rt *v3.RoleTemplate) error {
-	if reflect.DeepEqual(clusterRole.Rules, rt.Rules) {
+	if equality.Semantic.DeepEqual(clusterRole.Rules, rt.Rules) {
 		return nil
 	}
 	clusterRole = clusterRole.DeepCopy()
@@ -212,109 +224,6 @@ func (m *manager) createClusterRole(rt *v3.RoleTemplate) error {
 		return errors.Wrapf(err, "couldn't create clusterRole %v", rt.Name)
 	}
 	return nil
-}
-
-func (m *manager) ensureNamespacedRoles(rt *v3.RoleTemplate) error {
-	// if the RoleTemplate has cluster owner rules, don't update Roles
-	if isClusterOwner, err := m.isClusterOwner(rt.Name); isClusterOwner || err != nil {
-		return err
-	}
-
-	// role template is not a cluster owner
-	switch rt.Context {
-	case "cluster":
-		if err := m.updateRole(rt, m.clusterName); err != nil {
-			return err
-		}
-	case "project":
-		projects, err := m.projectLister.List(m.clusterName, labels.Everything())
-		if err != nil {
-			return err
-		}
-		for _, project := range projects {
-			if err := m.updateRole(rt, project.Name); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
-
-// isClusterOwner checks if a role template is cluster-owner, has cluster ownership rules, or inherits from a role template that grants cluster ownership.
-func (m *manager) isClusterOwner(rtName string) (bool, error) {
-	rt, err := m.rtLister.Get("", rtName)
-	if err != nil {
-		return false, err
-	}
-
-	// role template is the builtin cluster-owner
-	if rt.Builtin && rt.Context == "cluster" && rt.Name == "cluster-owner" {
-		return true, nil
-	}
-
-	for _, rule := range rt.Rules {
-		// cluster + own rule that indicates cluster owner permissions
-		if slice.ContainsString(rule.Resources, "clusters") && slice.ContainsString(rule.Verbs, "own") {
-			return true, nil
-		}
-		// rules with nonResourceURLs can only be applied to ClusterRoles and indicate a RoleTemplate with cluster owner permissions
-		if rule.NonResourceURLs != nil {
-			return true, nil
-		}
-	}
-
-	if len(rt.RoleTemplateNames) > 0 {
-		for _, inherited := range rt.RoleTemplateNames {
-			// recurse on inherited role template to check for cluster ownership
-			isOwner, err := m.isClusterOwner(inherited)
-			if err != nil {
-				return false, err
-			}
-
-			if isOwner {
-				return true, nil
-			}
-		}
-	}
-
-	return false, nil
-}
-
-func (m *manager) updateRole(rt *v3.RoleTemplate, namespace string) error {
-	if role, err := m.rLister.Get(namespace, rt.Name); err == nil && role != nil {
-		err = m.compareAndUpdateNamespacedRole(role, rt, namespace)
-		if err == nil {
-			return nil
-		}
-		if apierrors.IsConflict(err) {
-			// get object from etcd and retry
-			role, err = m.roles.GetNamespaced(namespace, rt.Name, metav1.GetOptions{})
-			if err != nil {
-				return errors.Wrapf(err, "error getting role %v", rt.Name)
-			}
-			return m.compareAndUpdateNamespacedRole(role, rt, namespace)
-		}
-		return errors.Wrapf(err, "couldn't update role %v", rt.Name)
-	} else if err != nil && !apierrors.IsNotFound(err) {
-		return errors.Wrapf(err, "error getting role from cache %v", rt.Name)
-	}
-	// auth/manager.go creates roles based on the prtb/crtb so not repeating it here
-	return nil
-}
-
-func (m *manager) compareAndUpdateNamespacedRole(role *rbacv1.Role, rt *v3.RoleTemplate, namespace string) error {
-	if reflect.DeepEqual(role.Rules, rt.Rules) {
-		return nil
-	}
-	role = role.DeepCopy()
-	role.Rules = rt.Rules
-	logrus.Infof("Updating role %v in %v because of rules difference with roleTemplate %v (%v).", role.Name, namespace, rt.DisplayName, rt.Name)
-	_, err := m.roles.Update(role)
-	if err != nil {
-		return errors.Wrapf(err, "couldn't update role %v in %v", rt.Name, namespace)
-	}
-	return err
 }
 
 func ToLowerRoleTemplates(roleTemplates map[string]*v3.RoleTemplate) {
@@ -443,10 +352,7 @@ type convertFn func(i interface{}) (string, string, []rbacv1.Subject)
 
 func (m *manager) ensureBindings(ns string, roles map[string]*v3.RoleTemplate, binding metav1.Object, client *objectclient.ObjectClient,
 	create createFn, list listFn, convert convertFn) error {
-	meta, err := meta.Accessor(binding)
-	if err != nil {
-		return err
-	}
+	objMeta := meta.AsPartialObjectMetadata(binding).ObjectMeta
 
 	desiredRBs := map[string]runtime.Object{}
 	subject, err := pkgrbac.BuildSubjectFromRTB(binding)
@@ -454,11 +360,11 @@ func (m *manager) ensureBindings(ns string, roles map[string]*v3.RoleTemplate, b
 		return err
 	}
 	for roleName := range roles {
-		rbKey, objectMeta, subjects, roleRef := bindingParts(ns, roleName, meta.GetNamespace()+"_"+meta.GetName(), subject)
+		rbKey, objectMeta, subjects, roleRef := bindingParts(ns, roleName, objMeta, subject)
 		desiredRBs[rbKey] = create(objectMeta, subjects, roleRef)
 	}
 
-	set := labels.Set(map[string]string{rtbOwnerLabel: meta.GetNamespace() + "_" + meta.GetName()})
+	set := labels.Set(map[string]string{rtbOwnerLabel: pkgrbac.GetRTBLabel(objMeta)})
 	currentRBs, err := list(ns, set.AsSelector())
 	if err != nil {
 		return err
@@ -517,7 +423,7 @@ func (m *manager) ensureBindings(ns string, roles map[string]*v3.RoleTemplate, b
 	return nil
 }
 
-func bindingParts(namespace, roleName, parentNsAndName string, subject rbacv1.Subject) (string, metav1.ObjectMeta, []rbacv1.Subject, rbacv1.RoleRef) {
+func bindingParts(namespace, roleName string, objMeta metav1.ObjectMeta, subject rbacv1.Subject) (string, metav1.ObjectMeta, []rbacv1.Subject, rbacv1.RoleRef) {
 	key := rbRoleSubjectKey(roleName, subject)
 
 	roleRef := rbacv1.RoleRef{
@@ -535,7 +441,7 @@ func bindingParts(namespace, roleName, parentNsAndName string, subject rbacv1.Su
 	return key,
 		metav1.ObjectMeta{
 			Name:   name,
-			Labels: map[string]string{rtbOwnerLabel: parentNsAndName},
+			Labels: map[string]string{rtbOwnerLabel: pkgrbac.GetRTBLabel(objMeta)},
 		},
 		[]rbacv1.Subject{subject},
 		roleRef
@@ -586,7 +492,7 @@ func prtbByNsName(obj interface{}) ([]string, error) {
 	if !ok {
 		return []string{}, nil
 	}
-	return []string{prtb.Namespace + "_" + prtb.Name}, nil
+	return []string{pkgrbac.GetRTBLabel(prtb.ObjectMeta)}, nil
 }
 
 func crbRoleSubjectKeys(roleName string, subjects []rbacv1.Subject) []string {
@@ -629,6 +535,14 @@ func rtbByClusterAndRoleTemplateName(obj interface{}) ([]string, error) {
 		return []string{}, nil
 	}
 	return []string{idx}, nil
+}
+
+func rtByInterhitedRTs(obj interface{}) ([]string, error) {
+	rt, ok := obj.(*wranglerv3.RoleTemplate)
+	if !ok {
+		return nil, fmt.Errorf("failed to convert object to *RoleTemplate in indexer [%s]", rtByInheritedRTsIndex)
+	}
+	return rt.RoleTemplateNames, nil
 }
 
 func rtbByClusterAndUserNotDeleting(obj interface{}) ([]string, error) {

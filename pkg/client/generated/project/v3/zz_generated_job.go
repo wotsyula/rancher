@@ -8,7 +8,9 @@ const (
 	JobType                               = "job"
 	JobFieldActiveDeadlineSeconds         = "activeDeadlineSeconds"
 	JobFieldAnnotations                   = "annotations"
+	JobFieldAppArmorProfile               = "appArmorProfile"
 	JobFieldAutomountServiceAccountToken  = "automountServiceAccountToken"
+	JobFieldBackoffLimitPerIndex          = "backoffLimitPerIndex"
 	JobFieldCompletionMode                = "completionMode"
 	JobFieldContainers                    = "containers"
 	JobFieldCreated                       = "created"
@@ -30,6 +32,8 @@ const (
 	JobFieldJobConfig                     = "jobConfig"
 	JobFieldJobStatus                     = "jobStatus"
 	JobFieldLabels                        = "labels"
+	JobFieldManagedBy                     = "managedBy"
+	JobFieldMaxFailedIndexes              = "maxFailedIndexes"
 	JobFieldName                          = "name"
 	JobFieldNamespaceId                   = "namespaceId"
 	JobFieldNodeID                        = "nodeId"
@@ -37,16 +41,19 @@ const (
 	JobFieldOverhead                      = "overhead"
 	JobFieldOwnerReferences               = "ownerReferences"
 	JobFieldPodFailurePolicy              = "podFailurePolicy"
+	JobFieldPodReplacementPolicy          = "podReplacementPolicy"
 	JobFieldPreemptionPolicy              = "preemptionPolicy"
 	JobFieldProjectID                     = "projectId"
 	JobFieldPublicEndpoints               = "publicEndpoints"
 	JobFieldReadinessGates                = "readinessGates"
 	JobFieldRemoved                       = "removed"
+	JobFieldResourceClaims                = "resourceClaims"
 	JobFieldRestartPolicy                 = "restartPolicy"
 	JobFieldRunAsGroup                    = "runAsGroup"
 	JobFieldRunAsNonRoot                  = "runAsNonRoot"
 	JobFieldRuntimeClassName              = "runtimeClassName"
 	JobFieldScheduling                    = "scheduling"
+	JobFieldSchedulingGates               = "schedulingGates"
 	JobFieldSeccompProfile                = "seccompProfile"
 	JobFieldSelector                      = "selector"
 	JobFieldServiceAccountName            = "serviceAccountName"
@@ -54,6 +61,8 @@ const (
 	JobFieldShareProcessNamespace         = "shareProcessNamespace"
 	JobFieldState                         = "state"
 	JobFieldSubdomain                     = "subdomain"
+	JobFieldSuccessPolicy                 = "successPolicy"
+	JobFieldSupplementalGroupsPolicy      = "supplementalGroupsPolicy"
 	JobFieldSuspend                       = "suspend"
 	JobFieldSysctls                       = "sysctls"
 	JobFieldTTLSecondsAfterFinished       = "ttlSecondsAfterFinished"
@@ -74,7 +83,9 @@ type Job struct {
 	types.Resource
 	ActiveDeadlineSeconds         *int64                         `json:"activeDeadlineSeconds,omitempty" yaml:"activeDeadlineSeconds,omitempty"`
 	Annotations                   map[string]string              `json:"annotations,omitempty" yaml:"annotations,omitempty"`
+	AppArmorProfile               *AppArmorProfile               `json:"appArmorProfile,omitempty" yaml:"appArmorProfile,omitempty"`
 	AutomountServiceAccountToken  *bool                          `json:"automountServiceAccountToken,omitempty" yaml:"automountServiceAccountToken,omitempty"`
+	BackoffLimitPerIndex          *int64                         `json:"backoffLimitPerIndex,omitempty" yaml:"backoffLimitPerIndex,omitempty"`
 	CompletionMode                string                         `json:"completionMode,omitempty" yaml:"completionMode,omitempty"`
 	Containers                    []Container                    `json:"containers,omitempty" yaml:"containers,omitempty"`
 	Created                       string                         `json:"created,omitempty" yaml:"created,omitempty"`
@@ -96,6 +107,8 @@ type Job struct {
 	JobConfig                     *JobConfig                     `json:"jobConfig,omitempty" yaml:"jobConfig,omitempty"`
 	JobStatus                     *JobStatus                     `json:"jobStatus,omitempty" yaml:"jobStatus,omitempty"`
 	Labels                        map[string]string              `json:"labels,omitempty" yaml:"labels,omitempty"`
+	ManagedBy                     string                         `json:"managedBy,omitempty" yaml:"managedBy,omitempty"`
+	MaxFailedIndexes              *int64                         `json:"maxFailedIndexes,omitempty" yaml:"maxFailedIndexes,omitempty"`
 	Name                          string                         `json:"name,omitempty" yaml:"name,omitempty"`
 	NamespaceId                   string                         `json:"namespaceId,omitempty" yaml:"namespaceId,omitempty"`
 	NodeID                        string                         `json:"nodeId,omitempty" yaml:"nodeId,omitempty"`
@@ -103,16 +116,19 @@ type Job struct {
 	Overhead                      map[string]string              `json:"overhead,omitempty" yaml:"overhead,omitempty"`
 	OwnerReferences               []OwnerReference               `json:"ownerReferences,omitempty" yaml:"ownerReferences,omitempty"`
 	PodFailurePolicy              *PodFailurePolicy              `json:"podFailurePolicy,omitempty" yaml:"podFailurePolicy,omitempty"`
+	PodReplacementPolicy          string                         `json:"podReplacementPolicy,omitempty" yaml:"podReplacementPolicy,omitempty"`
 	PreemptionPolicy              string                         `json:"preemptionPolicy,omitempty" yaml:"preemptionPolicy,omitempty"`
 	ProjectID                     string                         `json:"projectId,omitempty" yaml:"projectId,omitempty"`
 	PublicEndpoints               []PublicEndpoint               `json:"publicEndpoints,omitempty" yaml:"publicEndpoints,omitempty"`
 	ReadinessGates                []PodReadinessGate             `json:"readinessGates,omitempty" yaml:"readinessGates,omitempty"`
 	Removed                       string                         `json:"removed,omitempty" yaml:"removed,omitempty"`
+	ResourceClaims                []PodResourceClaim             `json:"resourceClaims,omitempty" yaml:"resourceClaims,omitempty"`
 	RestartPolicy                 string                         `json:"restartPolicy,omitempty" yaml:"restartPolicy,omitempty"`
 	RunAsGroup                    *int64                         `json:"runAsGroup,omitempty" yaml:"runAsGroup,omitempty"`
 	RunAsNonRoot                  *bool                          `json:"runAsNonRoot,omitempty" yaml:"runAsNonRoot,omitempty"`
 	RuntimeClassName              string                         `json:"runtimeClassName,omitempty" yaml:"runtimeClassName,omitempty"`
 	Scheduling                    *Scheduling                    `json:"scheduling,omitempty" yaml:"scheduling,omitempty"`
+	SchedulingGates               []PodSchedulingGate            `json:"schedulingGates,omitempty" yaml:"schedulingGates,omitempty"`
 	SeccompProfile                *SeccompProfile                `json:"seccompProfile,omitempty" yaml:"seccompProfile,omitempty"`
 	Selector                      *LabelSelector                 `json:"selector,omitempty" yaml:"selector,omitempty"`
 	ServiceAccountName            string                         `json:"serviceAccountName,omitempty" yaml:"serviceAccountName,omitempty"`
@@ -120,6 +136,8 @@ type Job struct {
 	ShareProcessNamespace         *bool                          `json:"shareProcessNamespace,omitempty" yaml:"shareProcessNamespace,omitempty"`
 	State                         string                         `json:"state,omitempty" yaml:"state,omitempty"`
 	Subdomain                     string                         `json:"subdomain,omitempty" yaml:"subdomain,omitempty"`
+	SuccessPolicy                 *SuccessPolicy                 `json:"successPolicy,omitempty" yaml:"successPolicy,omitempty"`
+	SupplementalGroupsPolicy      string                         `json:"supplementalGroupsPolicy,omitempty" yaml:"supplementalGroupsPolicy,omitempty"`
 	Suspend                       *bool                          `json:"suspend,omitempty" yaml:"suspend,omitempty"`
 	Sysctls                       []Sysctl                       `json:"sysctls,omitempty" yaml:"sysctls,omitempty"`
 	TTLSecondsAfterFinished       *int64                         `json:"ttlSecondsAfterFinished,omitempty" yaml:"ttlSecondsAfterFinished,omitempty"`

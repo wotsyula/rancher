@@ -3,12 +3,16 @@ package http
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/rancher/rancher/pkg/catalogv2/roundtripper"
+	"github.com/rancher/rancher/pkg/settings"
+	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -40,6 +44,7 @@ func HelmClient(secret *corev1.Secret, caBundle []byte, insecureSkipTLSVerify bo
 		}
 		pool, err := x509.SystemCertPool()
 		if err != nil {
+			logrus.Debugf("getting system cert pool failed with %v", err)
 			pool = x509.NewCertPool()
 		}
 		pool.AddCert(cert)
@@ -54,6 +59,14 @@ func HelmClient(secret *corev1.Secret, caBundle []byte, insecureSkipTLSVerify bo
 		Transport: transport,
 		Timeout:   30 * time.Second,
 	}
+
+	// Wrap the transport with a custom RoundTripper to set the User-Agent header
+	client.Transport = &roundtripper.UserAgent{
+		UserAgent: fmt.Sprintf("%s/%s %s", "go-rancher", settings.ServerVersion.Get(), "(HTTP-based Helm Repository)"),
+		Next:      client.Transport,
+	}
+
+	// Wrap the transport with the basicRoundTripper if username or password is provided
 	if username != "" || password != "" {
 		client.Transport = &basicRoundTripper{
 			username:               username,

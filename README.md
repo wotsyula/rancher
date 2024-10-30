@@ -2,21 +2,21 @@
 
 *This file is auto-generated from README-template.md, please make any changes there.*
 
-[![Build Status](https://drone-publish.rancher.io/api/badges/rancher/rancher/status.svg?branch=release/v2.6)](https://drone-publish.rancher.io/rancher/rancher)
 [![Docker Pulls](https://img.shields.io/docker/pulls/rancher/rancher.svg)](https://store.docker.com/community/images/rancher/rancher)
 [![Go Report Card](https://goreportcard.com/badge/github.com/rancher/rancher)](https://goreportcard.com/report/github.com/rancher/rancher)
 
 Rancher is an open source container management platform built for organizations that deploy containers in production. Rancher makes it easy to run Kubernetes everywhere, meet IT requirements, and empower DevOps teams.
 
-> Looking for Rancher 1.6.x info? [Click here](https://github.com/rancher/rancher/blob/master/README_1_6.md)
-
 ## Latest Release
-* v2.6
-  * Latest - v2.6.9 - `rancher/rancher:v2.6.9` / `rancher/rancher:latest` - Read the full release [notes](https://github.com/rancher/rancher/releases/tag/v2.6.9).
-  * Stable - v2.6.9 - `rancher/rancher:v2.6.9` / `rancher/rancher:stable` - Read the full release [notes](https://github.com/rancher/rancher/releases/tag/v2.6.9).
-* v2.5
-  * Latest - v2.5.16 - `rancher/rancher:v2.5.16` - Read the full release [notes](https://github.com/rancher/rancher/releases/tag/v2.5.16).
-  * Stable - v2.5.16 - `rancher/rancher:v2.5.16` - Read the full release [notes](https://github.com/rancher/rancher/releases/tag/v2.5.16).
+* v2.9
+  * Latest - v2.9.3 - `rancher/rancher:v2.9.3` / `rancher/rancher:latest` - Read the full release [notes](https://github.com/rancher/rancher/releases/tag/v2.9.3).
+  * Stable - v2.9.3 - `rancher/rancher:v2.9.3` / `rancher/rancher:stable` - Read the full release [notes](https://github.com/rancher/rancher/releases/tag/v2.9.3).
+* v2.8
+  * Latest - v2.8.5 - `rancher/rancher:v2.8.5` - Read the full release [notes](https://github.com/rancher/rancher/releases/tag/v2.8.5).
+  * Stable - v2.8.5 - `rancher/rancher:v2.8.5` - Read the full release [notes](https://github.com/rancher/rancher/releases/tag/v2.8.5).
+* v2.7
+  * Latest - v2.7.10 - `rancher/rancher:v2.7.10` - Read the full release [notes](https://github.com/rancher/rancher/releases/tag/v2.7.10).
+  * Stable - v2.7.10 - `rancher/rancher:v2.7.10` - Read the full release [notes](https://github.com/rancher/rancher/releases/tag/v2.7.10).
 
 To get automated notifications of our latest release, you can watch the announcements category in our [forums](http://forums.rancher.com/c/announcements), or subscribe to the RSS feed `https://forums.rancher.com/c/announcements.rss`.
 
@@ -28,35 +28,39 @@ Open your browser to https://localhost
 
 ## Installation
 
-See [Installing/Upgrading Rancher](https://rancher.com/docs/rancher/v2.6/en/installation/) for all installation options.
+See [Installing/Upgrading Rancher](https://ranchermanager.docs.rancher.com/v2.8/pages-for-subheaders/installation-and-upgrade) for all installation options.
 
 ### Minimum Requirements
 
 * Operating Systems
   * Please see [Support Matrix](https://rancher.com/support-matrix/) for specific OS versions for each Rancher version. Note that the link will default to the support matrix for the latest version of Rancher. Use the left navigation menu to select a different Rancher version. 
 * Hardware & Software
-  * Please see [Installation Requirements](https://rancher.com/docs/rancher/v2.6/en/installation/requirements/) for hardware and software requirements.
+  * Please see [Installation Requirements](https://ranchermanager.docs.rancher.com/v2.8/pages-for-subheaders/installation-requirements) for hardware and software requirements.
 
 ### Using Rancher
 
-To learn more about using Rancher, please refer to our [Rancher Documentation](https://rancher.com/docs/rancher/v2.6/en/).
+To learn more about using Rancher, please refer to our [Rancher Documentation](https://ranchermanager.docs.rancher.com/v2.8).
 
 ## Source Code
 
-This repo is a meta-repo used for packaging and contains the majority of Rancher codebase. For other Rancher projects and modules, [see go.mod](https://github.com/rancher/rancher/blob/release/v2.6/go.mod) for the full list.
+This repo is a meta-repo used for packaging and contains the majority of Rancher codebase. For other Rancher projects and modules, [see go.mod](https://github.com/rancher/rancher/blob/release/v2.8/go.mod) for the full list.
 
-Rancher also includes other open source libraries and projects, [see go.mod](https://github.com/rancher/rancher/blob/release/v2.6/go.mod) for the full list.
+Rancher also includes other open source libraries and projects, [see go.mod](https://github.com/rancher/rancher/blob/release/v2.8/go.mod) for the full list.
+
+## Build configuration
+
+Refer to the [build docs](docs/build.md) on how to customize the building and packaging of Rancher.
 
 ## Support, Discussion, and Community
 If you need any help with Rancher, please join us at either our [Rancher forums](http://forums.rancher.com/) or [Slack](https://slack.rancher.io/) where most of our team hangs out at.
 
 Please submit any Rancher bugs, issues, and feature requests to [rancher/rancher](https://github.com/rancher/rancher/issues).
 
-For security issues, please first check our [security policy](SECURITY.md) and email security-rancher@suse.com instead of posting a public issue in GitHub.  You may (but are not required to) use the GPG key located on [Keybase](https://keybase.io/rancher).
+For security issues, please first check our [security policy](https://github.com/rancher/rancher/security) and email security-rancher@suse.com instead of posting a public issue in GitHub.  You may (but are not required to) use the GPG key located on [Keybase](https://keybase.io/rancher).
 
 # License
 
-Copyright (c) 2014-2022 [Rancher Labs, Inc.](http://rancher.com)
+Copyright (c) 2014-2024 [Rancher Labs, Inc.](http://rancher.com)
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.

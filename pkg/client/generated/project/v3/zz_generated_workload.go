@@ -10,7 +10,9 @@ const (
 	WorkloadType                                      = "workload"
 	WorkloadFieldActiveDeadlineSeconds                = "activeDeadlineSeconds"
 	WorkloadFieldAnnotations                          = "annotations"
+	WorkloadFieldAppArmorProfile                      = "appArmorProfile"
 	WorkloadFieldAutomountServiceAccountToken         = "automountServiceAccountToken"
+	WorkloadFieldBackoffLimitPerIndex                 = "backoffLimitPerIndex"
 	WorkloadFieldCompletionMode                       = "completionMode"
 	WorkloadFieldContainers                           = "containers"
 	WorkloadFieldCreated                              = "created"
@@ -38,6 +40,8 @@ const (
 	WorkloadFieldJobConfig                            = "jobConfig"
 	WorkloadFieldJobStatus                            = "jobStatus"
 	WorkloadFieldLabels                               = "labels"
+	WorkloadFieldManagedBy                            = "managedBy"
+	WorkloadFieldMaxFailedIndexes                     = "maxFailedIndexes"
 	WorkloadFieldMaxSurge                             = "maxSurge"
 	WorkloadFieldMaxUnavailable                       = "maxUnavailable"
 	WorkloadFieldMinReadySeconds                      = "minReadySeconds"
@@ -45,11 +49,13 @@ const (
 	WorkloadFieldNamespaceId                          = "namespaceId"
 	WorkloadFieldNodeID                               = "nodeId"
 	WorkloadFieldOS                                   = "os"
+	WorkloadFieldOrdinals                             = "ordinals"
 	WorkloadFieldOverhead                             = "overhead"
 	WorkloadFieldOwnerReferences                      = "ownerReferences"
 	WorkloadFieldPaused                               = "paused"
 	WorkloadFieldPersistentVolumeClaimRetentionPolicy = "persistentVolumeClaimRetentionPolicy"
 	WorkloadFieldPodFailurePolicy                     = "podFailurePolicy"
+	WorkloadFieldPodReplacementPolicy                 = "podReplacementPolicy"
 	WorkloadFieldPreemptionPolicy                     = "preemptionPolicy"
 	WorkloadFieldProjectID                            = "projectId"
 	WorkloadFieldPublicEndpoints                      = "publicEndpoints"
@@ -59,12 +65,14 @@ const (
 	WorkloadFieldReplicaSetStatus                     = "replicaSetStatus"
 	WorkloadFieldReplicationControllerConfig          = "replicationControllerConfig"
 	WorkloadFieldReplicationControllerStatus          = "replicationControllerStatus"
+	WorkloadFieldResourceClaims                       = "resourceClaims"
 	WorkloadFieldRestartPolicy                        = "restartPolicy"
 	WorkloadFieldRunAsGroup                           = "runAsGroup"
 	WorkloadFieldRunAsNonRoot                         = "runAsNonRoot"
 	WorkloadFieldRuntimeClassName                     = "runtimeClassName"
 	WorkloadFieldScale                                = "scale"
 	WorkloadFieldScheduling                           = "scheduling"
+	WorkloadFieldSchedulingGates                      = "schedulingGates"
 	WorkloadFieldSeccompProfile                       = "seccompProfile"
 	WorkloadFieldSelector                             = "selector"
 	WorkloadFieldServiceAccountName                   = "serviceAccountName"
@@ -74,6 +82,8 @@ const (
 	WorkloadFieldStatefulSetConfig                    = "statefulSetConfig"
 	WorkloadFieldStatefulSetStatus                    = "statefulSetStatus"
 	WorkloadFieldSubdomain                            = "subdomain"
+	WorkloadFieldSuccessPolicy                        = "successPolicy"
+	WorkloadFieldSupplementalGroupsPolicy             = "supplementalGroupsPolicy"
 	WorkloadFieldSuspend                              = "suspend"
 	WorkloadFieldSysctls                              = "sysctls"
 	WorkloadFieldTTLSecondsAfterFinished              = "ttlSecondsAfterFinished"
@@ -95,7 +105,9 @@ type Workload struct {
 	types.Resource
 	ActiveDeadlineSeconds                *int64                                           `json:"activeDeadlineSeconds,omitempty" yaml:"activeDeadlineSeconds,omitempty"`
 	Annotations                          map[string]string                                `json:"annotations,omitempty" yaml:"annotations,omitempty"`
+	AppArmorProfile                      *AppArmorProfile                                 `json:"appArmorProfile,omitempty" yaml:"appArmorProfile,omitempty"`
 	AutomountServiceAccountToken         *bool                                            `json:"automountServiceAccountToken,omitempty" yaml:"automountServiceAccountToken,omitempty"`
+	BackoffLimitPerIndex                 *int64                                           `json:"backoffLimitPerIndex,omitempty" yaml:"backoffLimitPerIndex,omitempty"`
 	CompletionMode                       string                                           `json:"completionMode,omitempty" yaml:"completionMode,omitempty"`
 	Containers                           []Container                                      `json:"containers,omitempty" yaml:"containers,omitempty"`
 	Created                              string                                           `json:"created,omitempty" yaml:"created,omitempty"`
@@ -123,6 +135,8 @@ type Workload struct {
 	JobConfig                            *JobConfig                                       `json:"jobConfig,omitempty" yaml:"jobConfig,omitempty"`
 	JobStatus                            *JobStatus                                       `json:"jobStatus,omitempty" yaml:"jobStatus,omitempty"`
 	Labels                               map[string]string                                `json:"labels,omitempty" yaml:"labels,omitempty"`
+	ManagedBy                            string                                           `json:"managedBy,omitempty" yaml:"managedBy,omitempty"`
+	MaxFailedIndexes                     *int64                                           `json:"maxFailedIndexes,omitempty" yaml:"maxFailedIndexes,omitempty"`
 	MaxSurge                             intstr.IntOrString                               `json:"maxSurge,omitempty" yaml:"maxSurge,omitempty"`
 	MaxUnavailable                       intstr.IntOrString                               `json:"maxUnavailable,omitempty" yaml:"maxUnavailable,omitempty"`
 	MinReadySeconds                      int64                                            `json:"minReadySeconds,omitempty" yaml:"minReadySeconds,omitempty"`
@@ -130,11 +144,13 @@ type Workload struct {
 	NamespaceId                          string                                           `json:"namespaceId,omitempty" yaml:"namespaceId,omitempty"`
 	NodeID                               string                                           `json:"nodeId,omitempty" yaml:"nodeId,omitempty"`
 	OS                                   *PodOS                                           `json:"os,omitempty" yaml:"os,omitempty"`
+	Ordinals                             *StatefulSetOrdinals                             `json:"ordinals,omitempty" yaml:"ordinals,omitempty"`
 	Overhead                             map[string]string                                `json:"overhead,omitempty" yaml:"overhead,omitempty"`
 	OwnerReferences                      []OwnerReference                                 `json:"ownerReferences,omitempty" yaml:"ownerReferences,omitempty"`
 	Paused                               bool                                             `json:"paused,omitempty" yaml:"paused,omitempty"`
 	PersistentVolumeClaimRetentionPolicy *StatefulSetPersistentVolumeClaimRetentionPolicy `json:"persistentVolumeClaimRetentionPolicy,omitempty" yaml:"persistentVolumeClaimRetentionPolicy,omitempty"`
 	PodFailurePolicy                     *PodFailurePolicy                                `json:"podFailurePolicy,omitempty" yaml:"podFailurePolicy,omitempty"`
+	PodReplacementPolicy                 string                                           `json:"podReplacementPolicy,omitempty" yaml:"podReplacementPolicy,omitempty"`
 	PreemptionPolicy                     string                                           `json:"preemptionPolicy,omitempty" yaml:"preemptionPolicy,omitempty"`
 	ProjectID                            string                                           `json:"projectId,omitempty" yaml:"projectId,omitempty"`
 	PublicEndpoints                      []PublicEndpoint                                 `json:"publicEndpoints,omitempty" yaml:"publicEndpoints,omitempty"`
@@ -144,12 +160,14 @@ type Workload struct {
 	ReplicaSetStatus                     *ReplicaSetStatus                                `json:"replicaSetStatus,omitempty" yaml:"replicaSetStatus,omitempty"`
 	ReplicationControllerConfig          *ReplicationControllerConfig                     `json:"replicationControllerConfig,omitempty" yaml:"replicationControllerConfig,omitempty"`
 	ReplicationControllerStatus          *ReplicationControllerStatus                     `json:"replicationControllerStatus,omitempty" yaml:"replicationControllerStatus,omitempty"`
+	ResourceClaims                       []PodResourceClaim                               `json:"resourceClaims,omitempty" yaml:"resourceClaims,omitempty"`
 	RestartPolicy                        string                                           `json:"restartPolicy,omitempty" yaml:"restartPolicy,omitempty"`
 	RunAsGroup                           *int64                                           `json:"runAsGroup,omitempty" yaml:"runAsGroup,omitempty"`
 	RunAsNonRoot                         *bool                                            `json:"runAsNonRoot,omitempty" yaml:"runAsNonRoot,omitempty"`
 	RuntimeClassName                     string                                           `json:"runtimeClassName,omitempty" yaml:"runtimeClassName,omitempty"`
 	Scale                                *int64                                           `json:"scale,omitempty" yaml:"scale,omitempty"`
 	Scheduling                           *Scheduling                                      `json:"scheduling,omitempty" yaml:"scheduling,omitempty"`
+	SchedulingGates                      []PodSchedulingGate                              `json:"schedulingGates,omitempty" yaml:"schedulingGates,omitempty"`
 	SeccompProfile                       *SeccompProfile                                  `json:"seccompProfile,omitempty" yaml:"seccompProfile,omitempty"`
 	Selector                             *LabelSelector                                   `json:"selector,omitempty" yaml:"selector,omitempty"`
 	ServiceAccountName                   string                                           `json:"serviceAccountName,omitempty" yaml:"serviceAccountName,omitempty"`
@@ -159,6 +177,8 @@ type Workload struct {
 	StatefulSetConfig                    *StatefulSetConfig                               `json:"statefulSetConfig,omitempty" yaml:"statefulSetConfig,omitempty"`
 	StatefulSetStatus                    *StatefulSetStatus                               `json:"statefulSetStatus,omitempty" yaml:"statefulSetStatus,omitempty"`
 	Subdomain                            string                                           `json:"subdomain,omitempty" yaml:"subdomain,omitempty"`
+	SuccessPolicy                        *SuccessPolicy                                   `json:"successPolicy,omitempty" yaml:"successPolicy,omitempty"`
+	SupplementalGroupsPolicy             string                                           `json:"supplementalGroupsPolicy,omitempty" yaml:"supplementalGroupsPolicy,omitempty"`
 	Suspend                              *bool                                            `json:"suspend,omitempty" yaml:"suspend,omitempty"`
 	Sysctls                              []Sysctl                                         `json:"sysctls,omitempty" yaml:"sysctls,omitempty"`
 	TTLSecondsAfterFinished              *int64                                           `json:"ttlSecondsAfterFinished,omitempty" yaml:"ttlSecondsAfterFinished,omitempty"`

@@ -3,6 +3,11 @@ package authprovisioningv2
 import (
 	"fmt"
 	"reflect"
+	"strings"
+
+	"github.com/rancher/kubernetes-provider-detector/providers"
+	"github.com/rancher/rancher/pkg/controllers/dashboard/kubernetesprovider"
+	"k8s.io/apimachinery/pkg/labels"
 
 	v1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
 	"github.com/rancher/rancher/pkg/rbac"
@@ -60,6 +65,12 @@ func (h *handler) createClusterViewRole(cluster *v1.Cluster) error {
 		if _, err := h.roleController.Create(role); err != nil && !k8serrors.IsAlreadyExists(err) {
 			return err
 		}
+
+		// This is needed for creating RoleBindings when moving rke clusters to a different workspace.
+		// This is only needed for rke because Role and RoleBindings are moved to the new workspace. In other k8s distros they stay in the fleet-default ns.
+		if err = h.enqueueRoleTemplateBindingsForRKEClusters(cluster); err != nil {
+			return err
+		}
 		return nil
 	}
 
@@ -99,5 +110,29 @@ func (h *handler) cleanClusterAdminRoleBindings(cluster *v1.Cluster) error {
 	if len(allErrors) > 0 {
 		return fmt.Errorf("errors deleting cluster admin role binding: %v", allErrors)
 	}
+	return nil
+}
+
+func (h *handler) enqueueRoleTemplateBindingsForRKEClusters(cluster *v1.Cluster) error {
+	if cluster.Labels[kubernetesprovider.ProviderKey] == providers.RKE {
+		crtbs, err := h.clusterRoleTemplateBindings.List(cluster.Name, labels.Everything())
+		if err != nil {
+			return err
+		}
+		for _, crtb := range crtbs {
+			h.clusterRoleTemplateBindingController.Enqueue(crtb.Namespace, crtb.Name)
+		}
+		prtbs, err := h.projectRoleTemplateBindings.List("", labels.Everything())
+		if err != nil {
+			return err
+		}
+		for _, prtb := range prtbs {
+			clusterName := strings.Split(prtb.ProjectName, ":")[0]
+			if clusterName == cluster.Name {
+				h.projectRoleTemplateBindingController.Enqueue(prtb.Namespace, prtb.Name)
+			}
+		}
+	}
+
 	return nil
 }

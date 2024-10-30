@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -22,18 +23,18 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
-	"github.com/hashicorp/go-multierror"
 	"github.com/mattn/go-colorable"
 	"github.com/rancher/rancher/pkg/agent/clean"
+	"github.com/rancher/rancher/pkg/agent/clean/adunmigration"
 	"github.com/rancher/rancher/pkg/agent/cluster"
 	"github.com/rancher/rancher/pkg/agent/node"
 	"github.com/rancher/rancher/pkg/agent/rancher"
+	"github.com/rancher/rancher/pkg/controllers/managementuser/cavalidator"
 	"github.com/rancher/rancher/pkg/features"
 	"github.com/rancher/rancher/pkg/logserver"
 	"github.com/rancher/rancher/pkg/rkenodeconfigclient"
-	"github.com/rancher/rancher/pkg/rkenodeconfigserver"
 	"github.com/rancher/remotedialer"
-	"github.com/rancher/wrangler/pkg/signals"
+	"github.com/rancher/wrangler/v3/pkg/signals"
 	"github.com/sirupsen/logrus"
 )
 
@@ -42,8 +43,8 @@ var (
 )
 
 const (
-	Token                    = "X-API-Tunnel-Token"
-	KubeletCertValidityLimit = time.Hour * 72
+	Token          = "X-API-Tunnel-Token"
+	caFileLocation = "/etc/kubernetes/ssl/certs/serverca"
 )
 
 func main() {
@@ -57,31 +58,24 @@ func main() {
 			logrus.Warnf("failed to reconcile kubelet, error: %v", err)
 		}
 
-		logrus.SetOutput(colorable.NewColorableStdout())
+		configureLogrus()
+
 		logserver.StartServerWithDefaults()
-		if os.Getenv("CATTLE_DEBUG") == "true" || os.Getenv("RANCHER_DEBUG") == "true" {
-			logrus.SetLevel(logrus.DebugLevel)
-		}
 
 		initFeatures()
 
 		if os.Getenv("CLUSTER_CLEANUP") == "true" {
 			err = clean.Cluster()
 		} else if os.Getenv("BINDING_CLEANUP") == "true" {
-			var bindingErr error
-			err = clean.DuplicateBindings(nil)
-			if err != nil {
-				bindingErr = multierror.Append(bindingErr, err)
-			}
-			err = clean.OrphanBindings(nil)
-			if err != nil {
-				bindingErr = multierror.Append(bindingErr, err)
-			}
-			err = clean.OrphanCatalogBindings(nil)
-			if err != nil {
-				bindingErr = multierror.Append(bindingErr, err)
-			}
-			err = bindingErr
+			err = errors.Join(
+				clean.DuplicateBindings(nil),
+				clean.OrphanBindings(nil),
+				clean.OrphanCatalogBindings(nil),
+			)
+		} else if os.Getenv("AD_GUID_CLEANUP") == "true" {
+			dryrun := os.Getenv("DRY_RUN") == "true"
+			deleteMissingUsers := os.Getenv("AD_DELETE_MISSING_GUID_USERS") == "true"
+			err = adunmigration.UnmigrateAdGUIDUsers(nil, dryrun, deleteMissingUsers)
 		} else {
 			err = run(ctx)
 		}
@@ -210,114 +204,143 @@ func run(ctx context.Context) error {
 		rkenodeconfigclient.Params: {base64.StdEncoding.EncodeToString(bytes)},
 	}
 
-	err = KubeletNeedsNewCertificate(headers)
-	if err != nil {
-		return err
-	}
-
 	serverURL, err := url.Parse(server)
 	if err != nil {
 		return err
 	}
 
-	// Check if secure connection can be made successfully
-	var httpClient = &http.Client{
-		Timeout: time.Second * 5,
-	}
+	topContext = context.WithValue(topContext, cavalidator.CacertsValid, false)
 
-	_, err = httpClient.Get(server)
-	if err != nil {
-		if strings.Contains(err.Error(), "x509:") {
-			certErr := err
-			if strings.Contains(err.Error(), "certificate signed by unknown authority") {
-				certErr = fmt.Errorf("Certificate chain is not complete, please check if all needed intermediate certificates are included in the server certificate (in the correct order) and if the cacerts setting in Rancher either contains the correct CA certificate (in the case of using self signed certificates) or is empty (in the case of using a certificate signed by a recognized CA). Certificate information is displayed above. error: %s", err)
-			}
-			if strings.Contains(err.Error(), "certificate has expired or is not yet valid") {
-				certErr = fmt.Errorf("Server certificate is not valid, please check if the host has the correct time configured and if the server certificate has a notAfter date and time in the future. Certificate information is displayed above. error: %s", err)
-			}
-			if strings.Contains(err.Error(), "because it doesn't contain any IP SANs") || strings.Contains(err.Error(), "certificate is not valid for any names, but wanted to match") || strings.Contains(err.Error(), "cannot validate certificate for") {
-				certErr = fmt.Errorf("Server certificate does not contain correct DNS and/or IP address entries in the Subject Alternative Names (SAN). Certificate information is displayed above. error: %s", err)
-			}
-			insecureClient := &http.Client{
-				Timeout: time.Second * 5,
-				Transport: &http.Transport{
-					TLSClientConfig: &tls.Config{
-						InsecureSkipVerify: true,
-					},
-				},
-			}
-			res, err := insecureClient.Get(server)
-			if err != nil {
-				logrus.Errorf("Could not connect to %s: %v", server, err)
+	// Perform root CA verification
+	var transport *http.Transport
+	systemStoreConnectionCheckRequired := true
+	transport = rootCATransport()
+	if transport != nil {
+		logrus.Infof("Testing connection to %s using trusted certificate authorities within: %s", server, caFileLocation)
+		var httpClient = &http.Client{
+			Timeout:   time.Second * 5,
+			Transport: transport,
+		}
+		if _, err = httpClient.Get(server); err != nil {
+			if cluster.CAStrictVerify() {
+				logrus.Errorf("Could not securely connect to %s: %v", server, err)
 				os.Exit(1)
 			}
-			var lastFoundIssuer string
-			if res.TLS != nil && len(res.TLS.PeerCertificates) > 0 {
-				logrus.Infof("Certificate details from %s", serverURL)
-				var previouscert *x509.Certificate
-				for i := range res.TLS.PeerCertificates {
-					cert := res.TLS.PeerCertificates[i]
-					logrus.Infof("Certificate #%d (%s)", i, serverURL)
-					certinfo(cert)
-					if i > 0 {
-						if previouscert.Issuer.String() != cert.Subject.String() {
-							logrus.Errorf("Certficate's Subject (%s) does not match with previous certificate Issuer (%s). Please check if the configured server certificate contains all needed intermediate certificates and make sure they are in the correct order (server certificate first, intermediates after)", cert.Subject.String(), previouscert.Issuer.String())
+			// onConnect will use the transport later on, so discard it as it doesn't work and fallback to the system store.
+			transport = nil
+		} else {
+			topContext = context.WithValue(topContext, cavalidator.CacertsValid, true)
+			systemStoreConnectionCheckRequired = false
+		}
+	} else if cluster.CAStrictVerify() {
+		logrus.Errorf("Strict CA verification is enabled but encountered error finding root CA")
+		os.Exit(1)
+	}
+
+	if systemStoreConnectionCheckRequired {
+		// Check if secure connection can be made successfully
+		var httpClient = &http.Client{
+			Timeout: time.Second * 5,
+		}
+		_, err = httpClient.Get(server)
+		if err != nil {
+			if strings.Contains(err.Error(), "x509:") {
+				certErr := err
+				if strings.Contains(err.Error(), "certificate signed by unknown authority") {
+					certErr = fmt.Errorf("Certificate chain is not complete, please check if all needed intermediate certificates are included in the server certificate (in the correct order) and if the cacerts setting in Rancher either contains the correct CA certificate (in the case of using self signed certificates) or is empty (in the case of using a certificate signed by a recognized CA). Certificate information is displayed above. error: %s", err)
+				}
+				if strings.Contains(err.Error(), "certificate has expired or is not yet valid") {
+					certErr = fmt.Errorf("Server certificate is not valid, please check if the host has the correct time configured and if the server certificate has a notAfter date and time in the future. Certificate information is displayed above. error: %s", err)
+				}
+				if strings.Contains(err.Error(), "because it doesn't contain any IP SANs") || strings.Contains(err.Error(), "certificate is not valid for any names, but wanted to match") || strings.Contains(err.Error(), "cannot validate certificate for") {
+					certErr = fmt.Errorf("Server certificate does not contain correct DNS and/or IP address entries in the Subject Alternative Names (SAN). Certificate information is displayed above. error: %s", err)
+				}
+				insecureClient := &http.Client{
+					Timeout: time.Second * 5,
+					Transport: &http.Transport{
+						TLSClientConfig: &tls.Config{
+							InsecureSkipVerify: true,
+						},
+					},
+				}
+				res, err := insecureClient.Get(server)
+				if err != nil {
+					logrus.Errorf("Could not connect to %s: %v", server, err)
+					os.Exit(1)
+				}
+				var lastFoundIssuer string
+				if res.TLS != nil && len(res.TLS.PeerCertificates) > 0 {
+					logrus.Infof("Certificate details from %s", serverURL)
+					var previouscert *x509.Certificate
+					for i := range res.TLS.PeerCertificates {
+						cert := res.TLS.PeerCertificates[i]
+						logrus.Infof("Certificate #%d (%s)", i, serverURL)
+						certinfo(cert)
+						if i > 0 {
+							if previouscert.Issuer.String() != cert.Subject.String() {
+								logrus.Errorf("Certficate's Subject (%s) does not match with previous certificate Issuer (%s). Please check if the configured server certificate contains all needed intermediate certificates and make sure they are in the correct order (server certificate first, intermediates after)", cert.Subject.String(), previouscert.Issuer.String())
+							}
+						}
+						previouscert = cert
+						lastFoundIssuer = cert.Issuer.String()
+					}
+				}
+				if _, err := os.Stat(caFileLocation); err == nil {
+					caFile, err := ioutil.ReadFile(caFileLocation)
+					if err != nil {
+						return err
+					}
+					var blocks [][]byte
+					for {
+						var certDERBlock *pem.Block
+						certDERBlock, caFile = pem.Decode(caFile)
+						if certDERBlock == nil {
+							break
+						}
+
+						if certDERBlock.Type == "CERTIFICATE" {
+							blocks = append(blocks, certDERBlock.Bytes)
 						}
 					}
-					previouscert = cert
-					lastFoundIssuer = cert.Issuer.String()
+					if len(blocks) > 1 {
+						logrus.Warnf("Found %d certificates at %s, should be 1", len(blocks), caFileLocation)
+					}
+					logrus.Infof("Certificate details for %s", caFileLocation)
+
+					blockcount := 0
+					var lastCACert *x509.Certificate
+					for _, block := range blocks {
+						cert, err := x509.ParseCertificate(block)
+						if err != nil {
+							logrus.Println(err)
+							continue
+						}
+
+						logrus.Infof("Certificate #%d (%s)", blockcount, caFileLocation)
+						certinfo(cert)
+
+						blockcount = blockcount + 1
+						lastCACert = cert
+					}
+					if lastFoundIssuer != lastCACert.Issuer.String() {
+						logrus.Errorf("Issuer of last certificate found in chain (%s) does not match with CA certificate Issuer (%s). Please check if the configured server certificate contains all needed intermediate certificates and make sure they are in the correct order (server certificate first, intermediates after)", lastFoundIssuer, lastCACert.Issuer.String())
+					}
 				}
+				return certErr
 			}
-			caFileLocation := "/etc/kubernetes/ssl/certs/serverca"
-			if _, err := os.Stat(caFileLocation); err == nil {
-				caFile, err := ioutil.ReadFile(caFileLocation)
-				if err != nil {
-					return err
-				}
-				var blocks [][]byte
-				for {
-					var certDERBlock *pem.Block
-					certDERBlock, caFile = pem.Decode(caFile)
-					if certDERBlock == nil {
-						break
-					}
-
-					if certDERBlock.Type == "CERTIFICATE" {
-						blocks = append(blocks, certDERBlock.Bytes)
-					}
-				}
-				if len(blocks) > 1 {
-					logrus.Warnf("Found %d certificates at %s, should be 1", len(blocks), caFileLocation)
-				}
-				logrus.Infof("Certificate details for %s", caFileLocation)
-
-				blockcount := 0
-				var lastCACert *x509.Certificate
-				for _, block := range blocks {
-					cert, err := x509.ParseCertificate(block)
-					if err != nil {
-						logrus.Println(err)
-						continue
-					}
-
-					logrus.Infof("Certificate #%d (%s)", blockcount, caFileLocation)
-					certinfo(cert)
-
-					blockcount = blockcount + 1
-					lastCACert = cert
-				}
-				if lastFoundIssuer != lastCACert.Issuer.String() {
-					logrus.Errorf("Issuer of last certificate found in chain (%s) does not match with CA certificate Issuer (%s). Please check if the configured server certificate contains all needed intermediate certificates and make sure they are in the correct order (server certificate first, intermediates after)", lastFoundIssuer, lastCACert.Issuer.String())
-				}
-			}
-			return certErr
 		}
 	}
 
 	onConnect := func(ctx context.Context, _ *remotedialer.Session) error {
 		connected()
 		connectConfig := fmt.Sprintf("https://%s/v3/connect/config", serverURL.Host)
-		interval, err := rkenodeconfigclient.ConfigClient(ctx, connectConfig, headers, writeCertsOnly)
+		httpClient := http.Client{
+			Timeout: 300 * time.Second,
+		}
+		if transport != nil {
+			httpClient.Transport = transport
+		}
+		interval, err := rkenodeconfigclient.ConfigClient(ctx, &httpClient, connectConfig, headers, writeCertsOnly)
 		if err != nil {
 			return err
 		}
@@ -344,20 +367,13 @@ func run(ctx context.Context) error {
 			for {
 				select {
 				case <-time.After(tt):
-					// each time we request a plan we should
-					// check if our cert about to expire
-					err = KubeletNeedsNewCertificate(headers)
-					if err != nil {
-						logrus.Errorf("failed to check validity of kubelet certs: %v", err)
-					}
-					receivedInterval, err := rkenodeconfigclient.ConfigClient(ctx, connectConfig, headers, writeCertsOnly)
+					receivedInterval, err := rkenodeconfigclient.ConfigClient(ctx, &httpClient, connectConfig, headers, writeCertsOnly)
 					if err != nil {
 						logrus.Errorf("failed to check plan: %v", err)
 					} else if receivedInterval != 0 && receivedInterval != interval {
 						tt = time.Duration(receivedInterval) * time.Second
 						logrus.Infof("Plan monitor checking %v seconds", receivedInterval)
 					}
-
 				case <-ctx.Done():
 					return
 				}
@@ -377,12 +393,6 @@ func run(ctx context.Context) error {
 		wsURL := fmt.Sprintf("wss://%s/v3/connect", serverURL.Host)
 		if !isConnect() {
 			wsURL += "/register"
-		}
-
-		// check if we need a new kubelet cert on reconnection
-		err = KubeletNeedsNewCertificate(headers)
-		if err != nil {
-			return err
 		}
 
 		logrus.Infof("Connecting to %s with token starting with %s", wsURL, token[:len(token)/2])
@@ -506,78 +516,31 @@ func reconcileKubelet(ctx context.Context) (bool, error) {
 	return false, nil
 }
 
-// KubeletNeedsNewCertificate will set the
-// 'RegenerateKubeletCertificate' header field to true if
-// a) the kubelet serving certificate does not exist
-// b) the certificate will expire in 72 hours
-// c) the certificate does not accurately represent the
-//
-//	current IP address and Hostname of the node
-//
-// While the agent may denote it needs a new kubelet certificate
-// in its connection request, a new certificate will only be
-// delivered by Rancher if the generate_serving_certificate property
-// is set to 'true' for the clusters kubelet service.
-func KubeletNeedsNewCertificate(headers http.Header) error {
-	ipAddress := os.Getenv("CATTLE_ADDRESS")
-	currentHostname := os.Getenv("CATTLE_NODE_NAME")
-	fileSafeIPAddress := strings.ReplaceAll(ipAddress, ".", "-")
+func configureLogrus() {
+	logrus.SetOutput(colorable.NewColorableStdout())
 
-	cert, err := tls.LoadX509KeyPair(fmt.Sprintf("/etc/kubernetes/ssl/kube-kubelet-%s.pem", fileSafeIPAddress), fmt.Sprintf("/etc/kubernetes/ssl/kube-kubelet-%s-key.pem", fileSafeIPAddress))
-	if err != nil && !strings.Contains(err.Error(), "no such file") {
-		return err
+	if os.Getenv("CATTLE_TRACE") == "true" || os.Getenv("RANCHER_TRACE") == "true" {
+		logrus.SetLevel(logrus.TraceLevel)
+	} else if os.Getenv("CATTLE_DEBUG") == "true" || os.Getenv("RANCHER_DEBUG") == "true" {
+		logrus.SetLevel(logrus.DebugLevel)
 	}
+}
 
-	needsRegen, err := KubeletCertificateNeedsRegeneration(ipAddress, currentHostname, cert, time.Now())
+// rootCATransport generates a http.Transport that contains the contents of the CA file as the Root CA for strict validation.
+func rootCATransport() *http.Transport {
+	caFile, err := os.ReadFile(caFileLocation)
 	if err != nil {
-		return err
+		logrus.Errorf("unable to read CA file from %s: %v", caFileLocation, err)
+		return nil
 	}
-
-	if needsRegen {
-		headers.Set(rkenodeconfigserver.RegenerateKubeletCertificate, "true")
-	} else {
-		headers.Set(rkenodeconfigserver.RegenerateKubeletCertificate, "false")
+	certPool := x509.NewCertPool()
+	if ok := certPool.AppendCertsFromPEM(caFile); !ok {
+		logrus.Errorf("unable to parse CA file %s", caFileLocation)
+		return nil
 	}
-
-	return nil
-}
-
-func KubeletCertificateNeedsRegeneration(ipAddress, currentHostname string, cert tls.Certificate, currentTime time.Time) (bool, error) {
-	if len(cert.Certificate) == 0 {
-		return true, nil
+	return &http.Transport{
+		TLSClientConfig: &tls.Config{
+			RootCAs: certPool,
+		},
 	}
-
-	parsedCert, err := x509.ParseCertificate(cert.Certificate[0])
-	if err != nil {
-		return false, err
-	}
-
-	return !CertificateIncludesHostname(currentHostname, parsedCert) || CertificateIsExpiring(parsedCert, currentTime) || !CertificateIncludesCurrentIP(ipAddress, parsedCert), nil
-}
-
-// CertificateIsExpiring checks if the passed certificate will expire within
-// the KubeletCertValidityLimit
-func CertificateIsExpiring(cert *x509.Certificate, currentTime time.Time) bool {
-	return cert.NotAfter.Sub(currentTime) < KubeletCertValidityLimit
-}
-
-// CertificateIncludesHostname checks that the passed certificate includes
-// the provided hostname in its SAN list
-func CertificateIncludesHostname(hostname string, cert *x509.Certificate) bool {
-	for _, name := range cert.DNSNames {
-		if name == hostname {
-			return true
-		}
-	}
-	return false
-}
-
-// CertificateIncludesCurrentIP checks that the passed certificate includes the provided IP address
-func CertificateIncludesCurrentIP(ipAddress string, cert *x509.Certificate) bool {
-	for _, ip := range cert.IPAddresses {
-		if ipAddress == ip.String() {
-			return true
-		}
-	}
-	return false
 }

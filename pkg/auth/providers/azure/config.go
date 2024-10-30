@@ -28,7 +28,9 @@ func authProviderEnabled(config *v32.AzureADConfig) bool {
 	return config.Enabled && config.GraphEndpoint != ""
 }
 
-func isConfigDeprecated(cfg *v32.AzureADConfig) bool {
+// IsConfigDeprecated returns true if a given Azure AD auth config specifies the old,
+// deprecated authentication flow via the Azure AD Graph.
+func IsConfigDeprecated(cfg *v32.AzureADConfig) bool {
 	return authProviderEnabled(cfg) && !configHasNewFlowAnnotation(cfg)
 }
 
@@ -61,6 +63,7 @@ func updateEndpointsForGlobal(c *v32.AzureADConfig) {
 	// Update the Auth Endpoint and Token Endpoint.
 	c.AuthEndpoint = fmt.Sprintf("%s%s/oauth2/v2.0/authorize", c.Endpoint, c.TenantID)
 	c.TokenEndpoint = fmt.Sprintf("%s%s/oauth2/v2.0/token", c.Endpoint, c.TenantID)
+	c.DeviceAuthEndpoint = fmt.Sprintf("%s%s/oauth2/v2.0/devicecode", c.Endpoint, c.TenantID)
 }
 
 func updateEndpointsForChina(c *v32.AzureADConfig) {
@@ -77,4 +80,5 @@ func updateEndpointsForChina(c *v32.AzureADConfig) {
 	// Update the Auth Endpoint and Token Endpoint.
 	c.AuthEndpoint = fmt.Sprintf("%s%s/oauth2/v2.0/authorize", c.Endpoint, c.TenantID)
 	c.TokenEndpoint = fmt.Sprintf("%s%s/oauth2/v2.0/token", c.Endpoint, c.TenantID)
+	c.DeviceAuthEndpoint = fmt.Sprintf("%s%s/oauth2/v2.0/devicecode", c.Endpoint, c.TenantID)
 }

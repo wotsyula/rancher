@@ -17,7 +17,8 @@ spec:
     kubernetesVersion: "1.22"
     loggingTypes: []
     nodeGroups:
-    - desiredSize: 2
+    - arm: false
+      desiredSize: 2
       diskSize: 20
       ec2SshKey: ""
       gpu: false
@@ -44,6 +45,7 @@ spec:
     publicAccess: true
     publicAccessSources:
     - 0.0.0.0/0
+    ebsCSIDriver: false
     region: us-east-2
     secretsEncryption: false
     securityGroups: []
@@ -98,7 +100,8 @@ status:
       kubernetesVersion: "1.22"
       loggingTypes: []
       nodeGroups:
-      - desiredSize: 2
+      - arm: false
+        desiredSize: 2
         diskSize: 20
         ec2SshKey: null
         gpu: false
@@ -123,6 +126,7 @@ status:
       publicAccess: true
       publicAccessSources:
       - 0.0.0.0/0
+      ebsCSIDriver: false
       region: us-east-2
       secretsEncryption: false
       securityGroups: []
@@ -217,7 +221,8 @@ status:
       kubernetesVersion: "1.22"
       loggingTypes: []
       nodeGroups:
-      - desiredSize: 2
+      - arm: false
+        desiredSize: 2
         diskSize: 20
         ec2SshKey: null
         gpu: false
@@ -243,6 +248,7 @@ status:
       publicAccess: true
       publicAccessSources:
       - 0.0.0.0/0
+      ebsCSIDriver: false
       region: us-east-2
       secretsEncryption: false
       securityGroups: []

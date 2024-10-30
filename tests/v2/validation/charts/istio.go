@@ -1,15 +1,16 @@
 package charts
 
 import (
+	"context"
 	"strings"
 	"time"
 	"unicode"
 
-	"github.com/rancher/norman/types"
-	"github.com/rancher/rancher/tests/framework/clients/rancher"
-	v1 "github.com/rancher/rancher/tests/framework/clients/rancher/v1"
-	"github.com/rancher/rancher/tests/framework/extensions/charts"
-	"github.com/rancher/rancher/tests/framework/extensions/workloads"
+	"github.com/rancher/rancher/tests/v2/actions/charts"
+	"github.com/rancher/rancher/tests/v2/actions/workloads"
+	"github.com/rancher/shepherd/clients/rancher"
+	v1 "github.com/rancher/shepherd/clients/rancher/v1"
+	"github.com/rancher/shepherd/extensions/ingresses"
 	appv1 "k8s.io/api/apps/v1"
 	kubewait "k8s.io/apimachinery/pkg/util/wait"
 )
@@ -32,7 +33,7 @@ const (
 
 var (
 	// Rancher istio chart kiali path
-	kialiPath = "api/v1/namespaces/istio-system/services/http:kiali:20001/proxy/kiali/"
+	kialiPath = "api/v1/namespaces/istio-system/services/http:kiali:20001/proxy/console/"
 	// Rancher istio chart tracing path
 	tracingPath = "api/v1/namespaces/istio-system/services/http:tracing:16686/proxy/jaeger/search"
 )
@@ -61,13 +62,13 @@ func getChartCaseEndpointUntilBodyHas(client *rancher.Client, host, path, bodyPa
 		}, str)
 	}
 
-	err = kubewait.Poll(500*time.Millisecond, 2*time.Minute, func() (ongoing bool, err error) {
-		result, err := charts.GetChartCaseEndpoint(client, host, path, false)
+	err = kubewait.PollUntilContextTimeout(context.TODO(), 500*time.Millisecond, 2*time.Minute, true, func(context.Context) (ongoing bool, err error) {
+		bodyString, err := ingresses.GetExternalIngressResponse(client, host, path, false)
 		if err != nil {
 			return ongoing, err
 		}
 
-		trimmedBody := trimAllSpaces(result.Body)
+		trimmedBody := trimAllSpaces(bodyString)
 		if strings.Contains(trimmedBody, bodyPart) {
 			found = true
 			return !ongoing, nil
@@ -76,7 +77,7 @@ func getChartCaseEndpointUntilBodyHas(client *rancher.Client, host, path, bodyPa
 		return
 	})
 	if err != nil {
-		return
+		return false, err
 	}
 
 	return
@@ -85,7 +86,7 @@ func getChartCaseEndpointUntilBodyHas(client *rancher.Client, host, path, bodyPa
 // listIstioDeployments is a private helper function
 // that returns the deployment specs if deployments have "operator.istio.io/version" label
 func listIstioDeployments(steveclient *v1.Client) (deploymentSpecList []*appv1.DeploymentSpec, err error) {
-	deploymentList, err := steveclient.SteveType(workloads.DeploymentSteveType).List(&types.ListOpts{})
+	deploymentList, err := steveclient.SteveType(workloads.DeploymentSteveType).List(nil)
 	if err != nil {
 		return
 	}

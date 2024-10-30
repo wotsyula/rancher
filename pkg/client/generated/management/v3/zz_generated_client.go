@@ -16,8 +16,6 @@ type Client struct {
 	GlobalRole                                GlobalRoleOperations
 	GlobalRoleBinding                         GlobalRoleBindingOperations
 	RoleTemplate                              RoleTemplateOperations
-	PodSecurityPolicyTemplate                 PodSecurityPolicyTemplateOperations
-	PodSecurityPolicyTemplateProjectBinding   PodSecurityPolicyTemplateProjectBindingOperations
 	ClusterRoleTemplateBinding                ClusterRoleTemplateBindingOperations
 	ProjectRoleTemplateBinding                ProjectRoleTemplateBindingOperations
 	Cluster                                   ClusterOperations
@@ -41,25 +39,13 @@ type Client struct {
 	ProjectNetworkPolicy                      ProjectNetworkPolicyOperations
 	Setting                                   SettingOperations
 	Feature                                   FeatureOperations
-	ClusterAlert                              ClusterAlertOperations
-	ProjectAlert                              ProjectAlertOperations
-	Notifier                                  NotifierOperations
-	ClusterAlertGroup                         ClusterAlertGroupOperations
-	ProjectAlertGroup                         ProjectAlertGroupOperations
-	ClusterAlertRule                          ClusterAlertRuleOperations
-	ProjectAlertRule                          ProjectAlertRuleOperations
 	ComposeConfig                             ComposeConfigOperations
 	ProjectCatalog                            ProjectCatalogOperations
 	ClusterCatalog                            ClusterCatalogOperations
 	MultiClusterApp                           MultiClusterAppOperations
 	MultiClusterAppRevision                   MultiClusterAppRevisionOperations
-	GlobalDns                                 GlobalDnsOperations
-	GlobalDnsProvider                         GlobalDnsProviderOperations
 	KontainerDriver                           KontainerDriverOperations
 	EtcdBackup                                EtcdBackupOperations
-	MonitorMetric                             MonitorMetricOperations
-	ClusterMonitorGraph                       ClusterMonitorGraphOperations
-	ProjectMonitorGraph                       ProjectMonitorGraphOperations
 	CloudCredential                           CloudCredentialOperations
 	ManagementSecret                          ManagementSecretOperations
 	ClusterTemplate                           ClusterTemplateOperations
@@ -90,8 +76,6 @@ func NewClient(opts *clientbase.ClientOpts) (*Client, error) {
 	client.GlobalRole = newGlobalRoleClient(client)
 	client.GlobalRoleBinding = newGlobalRoleBindingClient(client)
 	client.RoleTemplate = newRoleTemplateClient(client)
-	client.PodSecurityPolicyTemplate = newPodSecurityPolicyTemplateClient(client)
-	client.PodSecurityPolicyTemplateProjectBinding = newPodSecurityPolicyTemplateProjectBindingClient(client)
 	client.ClusterRoleTemplateBinding = newClusterRoleTemplateBindingClient(client)
 	client.ProjectRoleTemplateBinding = newProjectRoleTemplateBindingClient(client)
 	client.Cluster = newClusterClient(client)
@@ -115,25 +99,13 @@ func NewClient(opts *clientbase.ClientOpts) (*Client, error) {
 	client.ProjectNetworkPolicy = newProjectNetworkPolicyClient(client)
 	client.Setting = newSettingClient(client)
 	client.Feature = newFeatureClient(client)
-	client.ClusterAlert = newClusterAlertClient(client)
-	client.ProjectAlert = newProjectAlertClient(client)
-	client.Notifier = newNotifierClient(client)
-	client.ClusterAlertGroup = newClusterAlertGroupClient(client)
-	client.ProjectAlertGroup = newProjectAlertGroupClient(client)
-	client.ClusterAlertRule = newClusterAlertRuleClient(client)
-	client.ProjectAlertRule = newProjectAlertRuleClient(client)
 	client.ComposeConfig = newComposeConfigClient(client)
 	client.ProjectCatalog = newProjectCatalogClient(client)
 	client.ClusterCatalog = newClusterCatalogClient(client)
 	client.MultiClusterApp = newMultiClusterAppClient(client)
 	client.MultiClusterAppRevision = newMultiClusterAppRevisionClient(client)
-	client.GlobalDns = newGlobalDnsClient(client)
-	client.GlobalDnsProvider = newGlobalDnsProviderClient(client)
 	client.KontainerDriver = newKontainerDriverClient(client)
 	client.EtcdBackup = newEtcdBackupClient(client)
-	client.MonitorMetric = newMonitorMetricClient(client)
-	client.ClusterMonitorGraph = newClusterMonitorGraphClient(client)
-	client.ProjectMonitorGraph = newProjectMonitorGraphClient(client)
 	client.CloudCredential = newCloudCredentialClient(client)
 	client.ManagementSecret = newManagementSecretClient(client)
 	client.ClusterTemplate = newClusterTemplateClient(client)

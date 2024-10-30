@@ -8,6 +8,7 @@ import (
 	"github.com/rancher/norman/types/convert"
 	v3 "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
 	v1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
+	"github.com/rancher/rancher/pkg/capr"
 	"github.com/rancher/rancher/pkg/features"
 	fleetconst "github.com/rancher/rancher/pkg/fleet"
 	capicontrollers "github.com/rancher/rancher/pkg/generated/controllers/cluster.x-k8s.io/v1beta1"
@@ -18,16 +19,16 @@ import (
 	"github.com/rancher/rancher/pkg/provisioningv2/kubeconfig"
 	"github.com/rancher/rancher/pkg/settings"
 	"github.com/rancher/rancher/pkg/wrangler"
-	"github.com/rancher/wrangler/pkg/apply"
-	"github.com/rancher/wrangler/pkg/condition"
-	corecontrollers "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
-	"github.com/rancher/wrangler/pkg/generic"
-	"github.com/rancher/wrangler/pkg/genericcondition"
-	"github.com/rancher/wrangler/pkg/kstatus"
-	"github.com/rancher/wrangler/pkg/name"
-	"github.com/rancher/wrangler/pkg/randomtoken"
-	"github.com/rancher/wrangler/pkg/relatedresource"
-	"github.com/rancher/wrangler/pkg/yaml"
+	"github.com/rancher/wrangler/v3/pkg/apply"
+	"github.com/rancher/wrangler/v3/pkg/condition"
+	corecontrollers "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
+	"github.com/rancher/wrangler/v3/pkg/generic"
+	"github.com/rancher/wrangler/v3/pkg/genericcondition"
+	"github.com/rancher/wrangler/v3/pkg/kstatus"
+	"github.com/rancher/wrangler/v3/pkg/name"
+	"github.com/rancher/wrangler/v3/pkg/randomtoken"
+	"github.com/rancher/wrangler/v3/pkg/relatedresource"
+	"github.com/rancher/wrangler/v3/pkg/yaml"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierror "k8s.io/apimachinery/pkg/api/errors"
@@ -38,10 +39,12 @@ import (
 )
 
 const (
-	ByCluster        = "by-cluster"
-	ByCloudCred      = "by-cloud-cred"
-	creatorIDAnn     = "field.cattle.io/creatorId"
-	administratedAnn = "provisioning.cattle.io/administrated"
+	ByCluster             = "by-cluster"
+	ByCloudCred           = "by-cloud-cred"
+	creatorIDAnn          = "field.cattle.io/creatorId"
+	administratedAnn      = "provisioning.cattle.io/administrated"
+	mgmtClusterNameAnn    = "provisioning.cattle.io/management-cluster-name"
+	fleetWorkspaceNameAnn = "provisioning.cattle.io/fleet-workspace-name"
 )
 
 var (
@@ -70,7 +73,7 @@ type handler struct {
 
 func Register(
 	ctx context.Context,
-	clients *wrangler.Context) {
+	clients *wrangler.Context, kubeconfigManager *kubeconfig.Manager) {
 	h := handler{
 		mgmtClusterCache:      clients.Mgmt.Cluster().Cache(),
 		mgmtClusters:          clients.Mgmt.Cluster(),
@@ -86,7 +89,7 @@ func Register(
 		capiClustersCache:     clients.CAPI.Cluster().Cache(),
 		capiClusters:          clients.CAPI.Cluster(),
 		capiMachinesCache:     clients.CAPI.Machine().Cache(),
-		kubeconfigManager:     kubeconfig.New(clients),
+		kubeconfigManager:     kubeconfigManager,
 		apply: clients.Apply.WithCacheTypes(
 			clients.Provisioning.Cluster(),
 			clients.Mgmt.Cluster()),
@@ -190,15 +193,34 @@ func (h *handler) generateProvisioningClusterFromLegacyCluster(cluster *v3.Clust
 	if !h.isLegacyCluster(cluster) || cluster.Spec.FleetWorkspaceName == "" {
 		return nil, status, nil
 	}
-	return []runtime.Object{
-		&v1.Cluster{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:        cluster.Name,
-				Namespace:   cluster.Spec.FleetWorkspaceName,
-				Labels:      yaml.CleanAnnotationsForExport(cluster.Labels),
-				Annotations: yaml.CleanAnnotationsForExport(cluster.Annotations),
-			},
+	provCluster := &v1.Cluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        cluster.Name,
+			Namespace:   cluster.Spec.FleetWorkspaceName,
+			Labels:      yaml.CleanAnnotationsForExport(cluster.Labels),
+			Annotations: yaml.CleanAnnotationsForExport(cluster.Annotations),
 		},
+	}
+
+	if cluster.Spec.ClusterAgentDeploymentCustomization != nil {
+		clusterAgentCustomizationCopy := cluster.Spec.ClusterAgentDeploymentCustomization.DeepCopy()
+		provCluster.Spec.ClusterAgentDeploymentCustomization = &v1.AgentDeploymentCustomization{
+			AppendTolerations:            clusterAgentCustomizationCopy.AppendTolerations,
+			OverrideAffinity:             clusterAgentCustomizationCopy.OverrideAffinity,
+			OverrideResourceRequirements: clusterAgentCustomizationCopy.OverrideResourceRequirements,
+		}
+	}
+	if cluster.Spec.FleetAgentDeploymentCustomization != nil {
+		fleetAgentCustomizationCopy := cluster.Spec.FleetAgentDeploymentCustomization.DeepCopy()
+		provCluster.Spec.FleetAgentDeploymentCustomization = &v1.AgentDeploymentCustomization{
+			AppendTolerations:            fleetAgentCustomizationCopy.AppendTolerations,
+			OverrideAffinity:             fleetAgentCustomizationCopy.OverrideAffinity,
+			OverrideResourceRequirements: fleetAgentCustomizationCopy.OverrideResourceRequirements,
+		}
+	}
+
+	return []runtime.Object{
+		provCluster,
 	}, status, nil
 }
 
@@ -281,8 +303,7 @@ func mgmtClusterName() (string, error) {
 func (h *handler) createNewCluster(cluster *v1.Cluster, status v1.ClusterStatus, spec v3.ClusterSpec) ([]runtime.Object, v1.ClusterStatus, error) {
 	spec.DisplayName = cluster.Name
 	spec.Description = cluster.Annotations["field.cattle.io/description"]
-	spec.FleetWorkspaceName = cluster.Namespace
-	spec.DefaultPodSecurityPolicyTemplateName = cluster.Spec.DefaultPodSecurityPolicyTemplateName
+	spec.DefaultPodSecurityAdmissionConfigurationTemplateName = cluster.Spec.DefaultPodSecurityAdmissionConfigurationTemplateName
 	spec.DefaultClusterRoleForProjectMembers = cluster.Spec.DefaultClusterRoleForProjectMembers
 	spec.EnableNetworkPolicy = cluster.Spec.EnableNetworkPolicy
 	spec.DesiredAgentImage = image.ResolveWithCluster(settings.AgentImage.Get(), cluster)
@@ -297,6 +318,32 @@ func (h *handler) createNewCluster(cluster *v1.Cluster, status v1.ClusterStatus,
 			Name:  env.Name,
 			Value: env.Value,
 		})
+	}
+
+	if cluster.Spec.RKEConfig != nil {
+		if dir := cluster.Spec.RKEConfig.DataDirectories.SystemAgent; dir != "" {
+			spec.AgentEnvVars = append(spec.AgentEnvVars, corev1.EnvVar{
+				Name:  capr.SystemAgentDataDirEnvVar,
+				Value: dir,
+			})
+		}
+	}
+
+	if cluster.Spec.ClusterAgentDeploymentCustomization != nil {
+		clusterAgentCustomizationCopy := cluster.Spec.ClusterAgentDeploymentCustomization.DeepCopy()
+		spec.ClusterAgentDeploymentCustomization = &v3.AgentDeploymentCustomization{
+			AppendTolerations:            clusterAgentCustomizationCopy.AppendTolerations,
+			OverrideAffinity:             clusterAgentCustomizationCopy.OverrideAffinity,
+			OverrideResourceRequirements: clusterAgentCustomizationCopy.OverrideResourceRequirements,
+		}
+	}
+	if cluster.Spec.FleetAgentDeploymentCustomization != nil {
+		fleetAgentCustomizationCopy := cluster.Spec.FleetAgentDeploymentCustomization.DeepCopy()
+		spec.FleetAgentDeploymentCustomization = &v3.AgentDeploymentCustomization{
+			AppendTolerations:            fleetAgentCustomizationCopy.AppendTolerations,
+			OverrideAffinity:             fleetAgentCustomizationCopy.OverrideAffinity,
+			OverrideResourceRequirements: fleetAgentCustomizationCopy.OverrideResourceRequirements,
+		}
 	}
 
 	if cluster.Spec.RKEConfig != nil {
@@ -320,7 +367,11 @@ func (h *handler) createNewCluster(cluster *v1.Cluster, status v1.ClusterStatus,
 		Spec: spec,
 	}
 
-	if newCluster.Name == "" {
+	if mgmtClusterNameAnnVal, ok := cluster.Annotations[mgmtClusterNameAnn]; ok && mgmtClusterNameAnnVal != "" && newCluster.Name == "" {
+		// If the management cluster name annotation is set to a non-empty value, and the mgmt cluster name has not been set yet, set the cluster name to the mgmt cluster name.
+		newCluster.Name = mgmtClusterNameAnnVal
+	} else if newCluster.Name == "" {
+		// If the management cluster name annotation is not set and the cluster name has not yet been generated, generate and set a new mgmt cluster name.
 		mgmtName, err := mgmtClusterName()
 		if err != nil {
 			return nil, status, err
@@ -334,6 +385,23 @@ func (h *handler) createNewCluster(cluster *v1.Cluster, status v1.ClusterStatus,
 
 	delete(cluster.Annotations, creatorIDAnn)
 
+	if features.ProvisioningV2FleetWorkspaceBackPopulation.Enabled() {
+		if forcedFleetWorkspaceName, ok := cluster.Annotations[fleetWorkspaceNameAnn]; ok && forcedFleetWorkspaceName != "" { // force set the fleet workspace name
+			newCluster.Spec.FleetWorkspaceName = forcedFleetWorkspaceName
+		} else {
+			if err := h.backpopulateMgmtClusterFleetWorkspaceName(newCluster); err != nil {
+				return nil, status, err
+			}
+			if newCluster.Spec.FleetWorkspaceName == "" { // fall back to using the provisioning cluster namespace as the fleet workspace name
+				newCluster.Spec.FleetWorkspaceName = cluster.Namespace
+			}
+		}
+	} else {
+		newCluster.Spec.FleetWorkspaceName = cluster.Namespace
+	}
+
+	status.FleetWorkspaceName = newCluster.Spec.FleetWorkspaceName
+
 	normalizedCluster, err := NormalizeCluster(newCluster, cluster.Spec.RKEConfig == nil)
 	if err != nil {
 		return nil, status, err
@@ -342,6 +410,21 @@ func (h *handler) createNewCluster(cluster *v1.Cluster, status v1.ClusterStatus,
 	return h.updateStatus([]runtime.Object{
 		normalizedCluster,
 	}, cluster, status, newCluster)
+}
+
+// backpopulateMgmtClusterFleetWorkspaceName backpopulates the fleet workspace name field from the v3 management cluster object onto the new desired object
+func (h *handler) backpopulateMgmtClusterFleetWorkspaceName(rCluster *v3.Cluster) error {
+	if rCluster == nil {
+		return nil
+	}
+	existing, err := h.mgmtClusterCache.Get(rCluster.Name)
+	if err != nil && !apierror.IsNotFound(err) {
+		return err
+	}
+	if existing != nil {
+		rCluster.Spec.FleetWorkspaceName = existing.Spec.FleetWorkspaceName
+	}
+	return nil
 }
 
 // updateStatus will update the status on the clusters.provisioning.cattle.io/v1 object.
@@ -355,7 +438,12 @@ func (h *handler) updateStatus(objs []runtime.Object, cluster *v1.Cluster, statu
 			ready = true
 		}
 		for _, messageCond := range existing.Status.Conditions {
-			if messageCond.Type == "Updated" || messageCond.Type == "Provisioned" || messageCond.Type == "Removed" {
+			if messageCond.Type == "Updated" || messageCond.Type == "Provisioned" || messageCond.Type == "Removed" || (cluster.Spec.RKEConfig != nil && messageCond.Type == "Ready") {
+				// Don't copy these conditions from v3 management object to the v1 provisioning object. This is because we copy these specific conditions from other places and we need to prevent clobbering.
+				// Updated - This is copied from the rkecontrolplane Ready condition to the v1 object by the rke2/provisioningcluster/controller.go via the reconcile function
+				// Provisioned - This is copied from the rkecontrolplane Ready condition to the v1 object by the rke2/provisioningcluster/controller.go via the reconcile function
+				// Removed - This is copied from the rkecontrolplane Removed condition on rkecontrolplane deletion.
+				// Ready - Conditionally, if RKEConfig != nil. This is copied from the rkecontrolplane Ready condition (if cluster is not stable) or v3/management cluster Ready condition (if cluster is stable) by the rke2/provisioningcluster/controller.go via the reconcile function
 				continue
 			}
 
@@ -398,9 +486,6 @@ func (h *handler) updateStatus(objs []runtime.Object, cluster *v1.Cluster, statu
 			return nil, status, err
 		}
 		if secret != nil {
-			if secret.UID == "" {
-				objs = append(objs, secret)
-			}
 			status.ClientSecretName = secret.Name
 
 			if features.MCM.Enabled() {

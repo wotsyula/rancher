@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"os"
@@ -49,7 +48,7 @@ func (d *BaseDriver) FriendlyName() string {
 
 func (d *BaseDriver) Remove() error {
 	cacheFilePrefix := d.cacheFile()
-	content, err := ioutil.ReadFile(cacheFilePrefix)
+	content, err := os.ReadFile(cacheFilePrefix)
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -59,9 +58,9 @@ func (d *BaseDriver) Remove() error {
 	}
 
 	dest := path.Join(binDir(), string(content))
-	os.Remove(dest)
-	os.Remove(cacheFilePrefix + "-" + string(content))
-	os.Remove(cacheFilePrefix)
+	_ = os.Remove(dest)
+	_ = os.Remove(cacheFilePrefix + "-" + string(content))
+	_ = os.Remove(cacheFilePrefix)
 
 	return nil
 }
@@ -78,8 +77,8 @@ func (d *BaseDriver) setError(err error) error {
 	errFile := d.cacheFile() + ".error"
 
 	if err != nil {
-		os.MkdirAll(path.Dir(errFile), 0700)
-		ioutil.WriteFile(errFile, []byte(err.Error()), 0600)
+		_ = os.MkdirAll(path.Dir(errFile), 0700)
+		_ = os.WriteFile(errFile, []byte(err.Error()), 0600)
 	}
 	return err
 }
@@ -87,7 +86,7 @@ func (d *BaseDriver) setError(err error) error {
 func (d *BaseDriver) getError() error {
 	errFile := d.cacheFile() + ".error"
 
-	if content, err := ioutil.ReadFile(errFile); err == nil {
+	if content, err := os.ReadFile(errFile); err == nil {
 		logrus.Errorf("Returning previous error: %s", content)
 		d.ClearError()
 		return errors.New(string(content))
@@ -98,7 +97,7 @@ func (d *BaseDriver) getError() error {
 
 func (d *BaseDriver) ClearError() {
 	errFile := d.cacheFile() + ".error"
-	os.Remove(errFile)
+	_ = os.Remove(errFile)
 }
 
 func (d *BaseDriver) stage(forceUpdate bool) error {
@@ -114,7 +113,7 @@ func (d *BaseDriver) stage(forceUpdate bool) error {
 		return err
 	}
 
-	tempFile, err := ioutil.TempFile("", "machine-driver")
+	tempFile, err := os.CreateTemp("", "machine-driver")
 	if err != nil {
 		return err
 	}
@@ -164,7 +163,7 @@ func (d *BaseDriver) Exists() bool {
 	}
 	_, err := os.Stat(d.binName())
 	if err == nil {
-		// The executable is there but do it come from the right version?
+		// The executable is there but does it come from the right version?
 		_, err = os.Stat(d.srcBinName())
 	}
 	return err == nil
@@ -181,12 +180,12 @@ func isElf(input string) bool {
 	if _, err := f.Read(elf); err != nil {
 		return false
 	}
-	//support unix binary and mac-os binary mach-o
+	// support unix binary and mac-os binary mach-o
 	return bytes.Compare(elf, []byte{0x7f, 0x45, 0x4c, 0x46}) == 0 || bytes.Compare(elf, []byte{0xcf, 0xfa, 0xed, 0xfe}) == 0
 }
 
 func (d *BaseDriver) copyBinary(cacheFile, input string) (string, error) {
-	temp, err := ioutil.TempDir("", "machine-driver-extract")
+	temp, err := os.MkdirTemp("", "machine-driver-extract")
 	if err != nil {
 		return "", err
 	}
@@ -223,17 +222,19 @@ func (d *BaseDriver) copyBinary(cacheFile, input string) (string, error) {
 		}
 	}
 
-	filepath.Walk(temp, filepath.WalkFunc(func(p string, info os.FileInfo, err error) error {
+	_ = filepath.Walk(temp, func(p string, info os.FileInfo, err error) error {
 		if info.IsDir() {
 			return nil
 		}
 
 		if strings.HasPrefix(path.Base(p), d.BinaryPrefix) {
-			file = p
+			if isElf(p) {
+				file = p
+			}
 		}
 
 		return nil
-	}))
+	})
 
 	if file == "" {
 		return "", fmt.Errorf("failed to find driver in archive. There must be a file of form %s*", d.BinaryPrefix)
@@ -242,6 +243,15 @@ func (d *BaseDriver) copyBinary(cacheFile, input string) (string, error) {
 	if driverName == "" {
 		driverName = path.Base(file)
 	}
+
+	info, err := os.Lstat(file)
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("driver %s is not a regular file", driverName)
+	}
+
 	f, err := os.Open(file)
 	if err != nil {
 		return "", err
@@ -252,7 +262,6 @@ func (d *BaseDriver) copyBinary(cacheFile, input string) (string, error) {
 		return "", err
 	}
 
-	driverName = strings.ToLower(driverName)
 	dest, err := os.Create(cacheFile + "-" + driverName)
 	if err != nil {
 		return "", err
@@ -264,7 +273,7 @@ func (d *BaseDriver) copyBinary(cacheFile, input string) (string, error) {
 	}
 
 	logrus.Infof("Found driver %s", driverName)
-	return driverName, ioutil.WriteFile(cacheFile, []byte(driverName), 0644)
+	return driverName, os.WriteFile(cacheFile, []byte(driverName), 0644)
 }
 
 // binName is the full path to the binary executable. This does not take in
@@ -339,7 +348,7 @@ func (d *BaseDriver) cacheFile() string {
 }
 
 func isInstalled(file string) (string, error) {
-	content, err := ioutil.ReadFile(file)
+	content, err := os.ReadFile(file)
 	if os.IsNotExist(err) {
 		return "", nil
 	}
@@ -348,6 +357,6 @@ func isInstalled(file string) (string, error) {
 
 func sha256Bytes(content []byte) string {
 	hash := sha256.New()
-	io.Copy(hash, bytes.NewBuffer(content))
+	_, _ = io.Copy(hash, bytes.NewBuffer(content))
 	return hex.EncodeToString(hash.Sum([]byte{}))
 }

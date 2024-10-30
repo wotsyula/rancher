@@ -1,6 +1,7 @@
 package utilities
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -9,9 +10,9 @@ import (
 	"strings"
 
 	"github.com/coreos/go-semver/semver"
-	kd "github.com/rancher/rancher/pkg/controllers/management/kontainerdrivermetadata"
 	img "github.com/rancher/rancher/pkg/image"
 	ext "github.com/rancher/rancher/pkg/image/external"
+	kd "github.com/rancher/rancher/pkg/kontainerdrivermetadata"
 	"github.com/rancher/rancher/pkg/settings"
 	"github.com/rancher/rke/types/image"
 	"github.com/rancher/rke/types/kdm"
@@ -55,8 +56,8 @@ type ImageTargetsAndSources struct {
 	TargetWindowsImagesAndSources []string
 }
 
-// GatherTargetImagesAndSources queries KDM and charts/system-charts to gather all the images used by Rancher and their source.
-// it an aggregate type, ImageTargetsAndSources, which contains the images required to run Rancher on Linux and Windows, as well
+// GatherTargetImagesAndSources queries KDM, charts and system-charts to gather all the images used by Rancher and their source.
+// It returns an aggregate type, ImageTargetsAndSources, which contains the images required to run Rancher on Linux and Windows, as well
 // as the source of each image.
 func GatherTargetImagesAndSources(systemChartsPath, chartsPath string, imagesFromArgs []string) (ImageTargetsAndSources, error) {
 	rancherVersion, ok := os.LookupEnv("TAG")
@@ -64,7 +65,7 @@ func GatherTargetImagesAndSources(systemChartsPath, chartsPath string, imagesFro
 		return ImageTargetsAndSources{}, fmt.Errorf("no tag defining current Rancher version, cannot gather target images and sources")
 	}
 
-	if !img.IsValidSemver(rancherVersion) || strings.HasPrefix(rancherVersion, "dev") || strings.HasPrefix(rancherVersion, "master") || strings.HasSuffix(rancherVersion, "-head") {
+	if !img.IsValidSemver(rancherVersion) || !settings.IsReleaseServerVersion(rancherVersion) {
 		rancherVersion = settings.RancherVersionDev
 	}
 	rancherVersion = strings.TrimPrefix(rancherVersion, "v")
@@ -140,6 +141,7 @@ func GatherTargetImagesAndSources(systemChartsPath, chartsPath string, imagesFro
 		ChartsPath:       chartsPath,
 		OsType:           img.Linux,
 		RancherVersion:   rancherVersion,
+		GithubEndpoints:  img.ExtensionEndpoints,
 	}
 	targetImages, targetImagesAndSources, err := img.GetImages(exportConfig, externalLinuxImages, linuxImagesFromArgs, linuxInfo.RKESystemImages)
 	if err != nil {
@@ -323,15 +325,31 @@ func checkImage(image string) error {
 
 func writeSliceToFile(filename string, versions []string) error {
 	log.Printf("Creating %s\n", filename)
+
+	dir := filepath.Dir(filename)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create directories: %w", err)
+	}
+
 	save, err := os.Create(filename)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create file: %w", err)
 	}
-	defer save.Close()
-	save.Chmod(0755)
+
+	defer func() {
+		if cerr := save.Close(); cerr != nil {
+			err = errors.Join(err, cerr)
+		}
+	}()
+
+	if err := save.Chmod(0755); err != nil {
+		return fmt.Errorf("failed to set file permissions: %w", err)
+	}
 
 	for _, version := range versions {
-		fmt.Fprintln(save, version)
+		if _, err := fmt.Fprintln(save, version); err != nil {
+			return fmt.Errorf("failed to write to file: %w", err)
+		}
 	}
 
 	return nil

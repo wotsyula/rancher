@@ -9,11 +9,12 @@ import (
 
 	"github.com/rancher/rancher/pkg/api/steve/proxy"
 	v3 "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
+	"github.com/rancher/rancher/pkg/capr"
 	managementcontrollers "github.com/rancher/rancher/pkg/generated/controllers/management.cattle.io/v3"
 	"github.com/rancher/rancher/pkg/wrangler"
 	"github.com/rancher/remotedialer"
-	"github.com/rancher/wrangler/pkg/condition"
-	"github.com/rancher/wrangler/pkg/ticker"
+	"github.com/rancher/wrangler/v3/pkg/condition"
+	"github.com/rancher/wrangler/v3/pkg/ticker"
 	"github.com/sirupsen/logrus"
 	apierror "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -103,6 +104,15 @@ func (c *checker) checkCluster(cluster *v3.Cluster) error {
 		return nil
 	}
 
+	// RKE2: wait to update the connected condition until it is pre-bootstrapped
+	if capr.PreBootstrap(cluster) &&
+		cluster.Annotations["provisioning.cattle.io/administrated"] == "true" &&
+		cluster.Name != "local" {
+		// overriding it to be disconnected until bootstrapping is done
+		logrus.Debugf("[pre-bootstrap][%v] Waiting for cluster to be pre-bootstrapped - not marking agent connected", cluster.Name)
+		return c.updateClusterConnectedCondition(cluster, false)
+	}
+
 	return c.updateClusterConnectedCondition(cluster, hasSession)
 }
 
@@ -118,6 +128,7 @@ func (c *checker) updateClusterConnectedCondition(cluster *v3.Cluster, connected
 			v3.ClusterConditionReady.Reason(cluster, "Disconnected")
 			v3.ClusterConditionReady.Message(cluster, "Cluster agent is not connected")
 		}
+		logrus.Tracef("[clusterConnectedCondition] update cluster %v", cluster.Name)
 		_, err := c.clusters.Update(cluster)
 		if apierror.IsConflict(err) {
 			cluster, err = c.clusters.Get(cluster.Name, metav1.GetOptions{})

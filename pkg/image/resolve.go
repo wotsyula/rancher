@@ -22,6 +22,7 @@ type ExportConfig struct {
 	OsType           OSType
 	ChartsPath       string
 	SystemChartsPath string
+	GithubEndpoints  []GithubEndpoint
 }
 
 type OSType int
@@ -38,12 +39,18 @@ var osTypeImageListName = map[OSType]string{
 	Linux:   "rancher-images",
 }
 
+// Resolve calls ResolveWithCluster passing nil into the cluster argument.
+// returns the image concatenated with the URL of the system default registry.
+// if there is no system default registry it will return the image
 func Resolve(image string) string {
 	return ResolveWithCluster(image, nil)
 }
 
+// ResolveWithCluster returns the image concatenated with the URL of the private registry specified, adding rancher/ if is a private repo.
+// It will use the cluster level registry if one is found, or the system default registry if no cluster level registry is found.
+// If either is not found, it returns the image.
 func ResolveWithCluster(image string, cluster *v3.Cluster) string {
-	reg := util.GetPrivateRepoURL(cluster)
+	reg := util.GetPrivateRegistryURL(cluster)
 	if reg != "" && !strings.HasPrefix(image, reg) {
 		// Images from Dockerhub Library repo, we add rancher prefix when using private registry
 		if !strings.Contains(image, "/") {
@@ -55,6 +62,10 @@ func ResolveWithCluster(image string, cluster *v3.Cluster) string {
 	return image
 }
 
+// GetImages fetches the list of container images used in the sources provided in the exportConfig.
+// Rancher charts, system charts, system images and extension images of Rancher are fetched.
+// GetImages is called during runtime by Rancher catalog package which is deprecated.
+// It is actually used for generation rancher-images.txt for airgap scenarios.
 func GetImages(exportConfig ExportConfig, externalImages map[string][]string, imagesFromArgs []string, rkeSystemImages map[string]rketypes.RKESystemImages) ([]string, []string, error) {
 	imagesSet := make(map[string]map[string]struct{})
 
@@ -74,6 +85,12 @@ func GetImages(exportConfig ExportConfig, externalImages map[string][]string, im
 	system := System{exportConfig}
 	if err := system.FetchImages(rkeSystemImages, imagesSet); err != nil {
 		return nil, nil, errors.Wrap(err, "failed to fetch images from system")
+	}
+
+	// fetch images from extension catalog images
+	extensions := ExtensionsConfig{exportConfig}
+	if err := extensions.FetchExtensionImages(imagesSet); err != nil {
+		return nil, nil, errors.Wrap(err, "failed to fetch images from extensions")
 	}
 
 	setRequirementImages(exportConfig.OsType, imagesSet)
@@ -130,8 +147,8 @@ func setRequirementImages(osType OSType, imagesSet map[string]map[string]struct{
 	case Linux:
 		addSourceToImage(imagesSet, settings.ShellImage.Get(), coreLabel)
 		addSourceToImage(imagesSet, settings.MachineProvisionImage.Get(), coreLabel)
-		addSourceToImage(imagesSet, "rancher/mirrored-bci-busybox:15.4.11.2", coreLabel)
-		addSourceToImage(imagesSet, "rancher/mirrored-bci-micro:15.4.14.3", coreLabel)
+		addSourceToImage(imagesSet, "rancher/mirrored-bci-busybox:15.6.24.2", coreLabel)
+		addSourceToImage(imagesSet, "rancher/mirrored-bci-micro:15.6.24.2", coreLabel)
 	}
 }
 

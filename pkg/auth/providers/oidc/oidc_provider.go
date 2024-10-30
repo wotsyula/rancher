@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/coreos/go-oidc/v3/oidc"
-	"github.com/mitchellh/mapstructure"
+	"github.com/golang-jwt/jwt"
 	"github.com/pkg/errors"
 	"github.com/rancher/norman/httperror"
 	"github.com/rancher/norman/types"
@@ -47,13 +48,14 @@ type OpenIDCProvider struct {
 type ClaimInfo struct {
 	Subject           string   `json:"sub"`
 	Name              string   `json:"name"`
-	PreferredUsername string   `json:preferred_username`
-	GivenName         string   `json:given_name`
-	FamilyName        string   `json:family_name`
+	PreferredUsername string   `json:"preferred_username"`
+	GivenName         string   `json:"given_name"`
+	FamilyName        string   `json:"family_name"`
 	Email             string   `json:"email"`
 	EmailVerified     bool     `json:"email_verified"`
 	Groups            []string `json:"groups"`
 	FullGroupPath     []string `json:"full_group_path"`
+	ACR               string   `json:"acr"`
 }
 
 func Configure(ctx context.Context, mgmtCtx *config.ScaledContext, userMGR user.Manager, tokenMGR *tokens.Manager) common.AuthProvider {
@@ -66,6 +68,14 @@ func Configure(ctx context.Context, mgmtCtx *config.ScaledContext, userMGR user.
 		UserMGR:     userMGR,
 		TokenMGR:    tokenMGR,
 	}
+}
+
+func (o *OpenIDCProvider) LogoutAll(apiContext *types.APIContext, token *v3.Token) error {
+	return nil
+}
+
+func (o *OpenIDCProvider) Logout(apiContext *types.APIContext, token *v3.Token) error {
+	return nil
 }
 
 func (o *OpenIDCProvider) GetName() string {
@@ -186,9 +196,11 @@ func (o *OpenIDCProvider) TransformToAuthProvider(authConfig map[string]interfac
 }
 
 func (o *OpenIDCProvider) getRedirectURL(config map[string]interface{}) string {
+	authURL, _ := FetchAuthURL(config)
+
 	return fmt.Sprintf(
 		"%s?client_id=%s&response_type=code&redirect_uri=%s",
-		config["authEndpoint"],
+		authURL,
 		config["clientId"],
 		config["rancherUrl"],
 	)
@@ -288,17 +300,19 @@ func (o *OpenIDCProvider) saveOIDCConfig(config *v32.OIDCConfig) error {
 
 	if config.PrivateKey != "" {
 		privateKeyField := strings.ToLower(client.OIDCConfigFieldPrivateKey)
-		if err = common.CreateOrUpdateSecrets(o.Secrets, config.PrivateKey, privateKeyField, strings.ToLower(config.Type)); err != nil {
+		name, err := common.CreateOrUpdateSecrets(o.Secrets, config.PrivateKey, privateKeyField, strings.ToLower(config.Type))
+		if err != nil {
 			return err
 		}
-		config.PrivateKey = common.GetName(config.Type, privateKeyField)
+		config.PrivateKey = name
 	}
 
 	secretField := strings.ToLower(client.OIDCConfigFieldClientSecret)
-	if err := common.CreateOrUpdateSecrets(o.Secrets, convert.ToString(config.ClientSecret), secretField, strings.ToLower(config.Type)); err != nil {
+	name, err := common.CreateOrUpdateSecrets(o.Secrets, convert.ToString(config.ClientSecret), secretField, strings.ToLower(config.Type))
+	if err != nil {
 		return err
 	}
-	config.ClientSecret = common.GetName(config.Type, secretField)
+	config.ClientSecret = name
 
 	logrus.Debugf("[generic oidc] saveOIDCConfig: updating config")
 	_, err = o.AuthConfigs.ObjectClient().Update(config.ObjectMeta.Name, config)
@@ -318,15 +332,10 @@ func (o *OpenIDCProvider) GetOIDCConfig() (*v32.OIDCConfig, error) {
 	storedOidcConfigMap := u.UnstructuredContent()
 
 	storedOidcConfig := &v32.OIDCConfig{}
-	mapstructure.Decode(storedOidcConfigMap, storedOidcConfig)
-
-	metadataMap, ok := storedOidcConfigMap["metadata"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("failed to retrieve OIDCConfig metadata, cannot read k8s Unstructured data")
+	err = common.Decode(storedOidcConfigMap, storedOidcConfig)
+	if err != nil {
+		return nil, fmt.Errorf("unable to decode OidcConfig: %w", err)
 	}
-	objectMeta := &metav1.ObjectMeta{}
-	mapstructure.Decode(metadataMap, objectMeta)
-	storedOidcConfig.ObjectMeta = *objectMeta
 
 	if storedOidcConfig.PrivateKey != "" {
 		value, err := common.ReadFromSecret(o.Secrets, storedOidcConfig.PrivateKey, strings.ToLower(client.OIDCConfigFieldPrivateKey))
@@ -376,22 +385,33 @@ func (o *OpenIDCProvider) getUserInfo(ctx *context.Context, config *v32.OIDCConf
 		return userInfo, oauth2Token, err
 	}
 
-	provider, err := oidc.NewProvider(updatedContext, config.Issuer)
+	provider, err := o.getOIDCProvider(updatedContext, config)
 	if err != nil {
 		return userInfo, oauth2Token, err
 	}
 	oauthConfig := ConfigToOauthConfig(provider.Endpoint(), config)
 	var verifier = provider.Verifier(&oidc.Config{ClientID: config.ClientID})
-	if err := json.Unmarshal([]byte(authCode), &oauth2Token); err != nil {
-		oauth2Token, err = oauthConfig.Exchange(updatedContext, authCode, oauth2.SetAuthURLParam("scope", strings.Join(oauthConfig.Scopes, " ")))
-		if err != nil {
-			return userInfo, oauth2Token, err
-		}
-		_, err = verifier.Verify(updatedContext, oauth2Token.AccessToken)
-		if err != nil {
-			return userInfo, oauth2Token, err
-		}
+
+	oauth2Token, err = oauthConfig.Exchange(updatedContext, authCode, oauth2.SetAuthURLParam("scope", strings.Join(oauthConfig.Scopes, " ")))
+	if err != nil {
+		return userInfo, oauth2Token, err
 	}
+
+	// Get the ID token.  The ID token should be there because we require the openid scope.
+	rawIDToken, ok := oauth2Token.Extra("id_token").(string)
+	if !ok {
+		return userInfo, oauth2Token, fmt.Errorf("no id_token field in oauth2 token")
+	}
+
+	idToken, err := verifier.Verify(updatedContext, rawIDToken)
+	if err != nil {
+		return userInfo, oauth2Token, fmt.Errorf("failed to verify ID token: %w", err)
+	}
+
+	if err := idToken.Claims(&claimInfo); err != nil {
+		return userInfo, oauth2Token, fmt.Errorf("failed to parse claims: %w", err)
+	}
+
 	// Valid will return false if access token is expired
 	if !oauth2Token.Valid() {
 		// since token is not valid, the TokenSource func will attempt to refresh the access token
@@ -405,6 +425,17 @@ func (o *OpenIDCProvider) getUserInfo(ctx *context.Context, config *v32.OIDCConf
 	if !reflect.DeepEqual(oauth2Token, reusedToken) {
 		o.UpdateToken(reusedToken, userName)
 	}
+
+	if config.AcrValue != "" {
+		acrValue, err := parseACRFromAccessToken(oauth2Token.AccessToken)
+		if err != nil {
+			return userInfo, oauth2Token, fmt.Errorf("failed to parse ACR from access token: %w", err)
+		}
+		if !isValidACR(acrValue, config.AcrValue) {
+			return userInfo, oauth2Token, errors.New("failed to validate ACR")
+		}
+	}
+
 	logrus.Debugf("[generic oidc] getUserInfo: getting user info")
 	userInfo, err = provider.UserInfo(updatedContext, oauthConfig.TokenSource(updatedContext, reusedToken))
 	if err != nil {
@@ -484,7 +515,68 @@ func (o *OpenIDCProvider) IsDisabledProvider() (bool, error) {
 	return !oidcConfig.Enabled, nil
 }
 
-// CleanupResources deletes resources associated with the OIDC auth provider.
-func (o *OpenIDCProvider) CleanupResources(*v3.AuthConfig) error {
-	return nil
+func (o *OpenIDCProvider) getOIDCProvider(ctx context.Context, oidcConfig *v32.OIDCConfig) (*oidc.Provider, error) {
+	oidcFields := map[string]string{
+		client.OIDCConfigFieldIssuer:           oidcConfig.Issuer,
+		client.OIDCConfigFieldAuthEndpoint:     oidcConfig.AuthEndpoint,
+		client.OIDCConfigFieldTokenEndpoint:    oidcConfig.TokenEndpoint,
+		client.OIDCConfigFieldJWKSUrl:          oidcConfig.JWKSUrl,
+		client.OIDCConfigFieldUserInfoEndpoint: oidcConfig.UserInfoEndpoint,
+	}
+	var emptyFields []string
+	for key, value := range oidcFields {
+		if value == "" {
+			emptyFields = append(emptyFields, key)
+		}
+	}
+
+	// If all the fields are set, we will use them and manually specify each one.
+	// Otherwise, we will fall back to using just the issuer and the others will be determined by discovery.
+	if len(emptyFields) > 0 && slices.Contains(emptyFields, oidcFields[client.OIDCConfigFieldIssuer]) {
+		return nil, fmt.Errorf("unable to create OIDC provider. The following fields are missing: %s", strings.Join(emptyFields, ","))
+	}
+
+	if len(emptyFields) == 0 {
+		pConfig := &oidc.ProviderConfig{
+			IssuerURL:   oidcConfig.Issuer,
+			AuthURL:     oidcConfig.AuthEndpoint,
+			TokenURL:    oidcConfig.TokenEndpoint,
+			UserInfoURL: oidcConfig.UserInfoEndpoint,
+			JWKSURL:     oidcConfig.JWKSUrl,
+		}
+		return pConfig.NewProvider(ctx), nil
+	}
+	// This will perform discovery in the oidc library
+	return oidc.NewProvider(ctx, oidcConfig.Issuer)
+}
+
+func isValidACR(claimACR string, configuredACR string) bool {
+	// if we have no ACR configured, all values are accepted
+	if configuredACR == "" {
+		return true
+	}
+
+	if claimACR != configuredACR {
+		logrus.Infof("acr value in token does not match configured acr value")
+		return false
+	}
+	return true
+}
+
+func parseACRFromAccessToken(accessToken string) (string, error) {
+	var parser jwt.Parser
+	// we already validated the incoming token
+	token, _, err := parser.ParseUnverified(accessToken, jwt.MapClaims{})
+	if err != nil {
+		return "", fmt.Errorf("failed to parse token: %w", err)
+	}
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return "", errors.New("invalid access token jwt.MapClaims format")
+	}
+	acrValue, found := claims["acr"].(string)
+	if !found {
+		return "", fmt.Errorf("acr claim invalid or not found in token: (acr=%v)", claims["acr"])
+	}
+	return acrValue, nil
 }

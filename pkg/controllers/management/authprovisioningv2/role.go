@@ -9,9 +9,9 @@ import (
 	v3 "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
 	v1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
 	"github.com/rancher/rancher/pkg/rbac"
-	apiextcontrollers "github.com/rancher/wrangler/pkg/generated/controllers/apiextensions.k8s.io/v1"
-	"github.com/rancher/wrangler/pkg/generic"
-	"github.com/rancher/wrangler/pkg/name"
+	apiextcontrollers "github.com/rancher/wrangler/v3/pkg/generated/controllers/apiextensions.k8s.io/v1"
+	"github.com/rancher/wrangler/v3/pkg/generic"
+	"github.com/rancher/wrangler/v3/pkg/name"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierror "k8s.io/apimachinery/pkg/api/errors"
@@ -54,9 +54,18 @@ func crdToResourceMatch(crd *apiextv1.CustomResourceDefinition) *resourceMatch {
 		return nil
 	}
 
+	version := crd.Spec.Versions[0]
+
+	for _, ver := range crd.Spec.Versions {
+		if !ver.Deprecated {
+			version = ver
+			break
+		}
+	}
+
 	gvk := schema.GroupVersionKind{
 		Group:   crd.Spec.Group,
-		Version: crd.Spec.Versions[0].Name,
+		Version: version.Name,
 		Kind:    crd.Status.AcceptedNames.Kind,
 	}
 
@@ -156,6 +165,30 @@ func (h *handler) OnChange(key string, rt *v3.RoleTemplate) (*v3.RoleTemplate, e
 	}
 
 	return rt, nil
+}
+
+func isProtectedRBACResource(obj runtime.Object) bool {
+	var isClusterRole bool
+	switch obj.(type) {
+	case *rbacv1.ClusterRole, *rbacv1.ClusterRoleBinding:
+		isClusterRole = true
+	}
+
+	m, err := meta.Accessor(obj)
+	if err != nil {
+		return false
+	}
+	annotations := m.GetAnnotations()
+
+	if _, ok := annotations[clusterNameLabel]; !ok {
+		return false
+	}
+
+	if _, ok := annotations[clusterNamespaceLabel]; !ok && !isClusterRole {
+		return false
+	}
+
+	return true
 }
 
 func (h *handler) hasAnnotationsForDeletingCluster(annotations map[string]string, isClusterRole bool) (bool, error) {
@@ -313,8 +346,12 @@ func (h *handler) objects(rt *v3.RoleTemplate, enqueue bool, cluster *v1.Cluster
 	return nil
 }
 
-func (h *handler) getResourceNames(resourceMatch resourceMatch, cluster *v1.Cluster) ([]string, error) {
-	objs, err := h.dynamic.GetByIndex(resourceMatch.GVK, clusterIndexed, fmt.Sprintf("%s/%s", cluster.Namespace, cluster.Name))
+type indexGetter interface {
+	GetByIndex(gvk schema.GroupVersionKind, indexName, key string) ([]runtime.Object, error)
+}
+
+func getResourceNames(indexer indexGetter, resourceMatch resourceMatch, cluster *v1.Cluster) ([]string, error) {
+	objs, err := indexer.GetByIndex(resourceMatch.GVK, clusterIndexed, fmt.Sprintf("%s/%s", cluster.Namespace, cluster.Name))
 	if err != nil {
 		return nil, err
 	}
@@ -326,6 +363,7 @@ func (h *handler) getResourceNames(resourceMatch resourceMatch, cluster *v1.Clus
 		}
 		result = append(result, objMeta.GetName())
 	}
+	sort.Strings(result)
 	return result, nil
 }
 
@@ -355,7 +393,7 @@ func (h *handler) createRoleForCluster(rt *v3.RoleTemplate, matches []match, clu
 	}
 
 	for _, match := range matches {
-		names, err := h.getResourceNames(match.Match, cluster)
+		names, err := getResourceNames(h.dynamic, match.Match, cluster)
 		if err != nil {
 			return err
 		}

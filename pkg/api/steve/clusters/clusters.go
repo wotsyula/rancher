@@ -18,8 +18,8 @@ import (
 	"github.com/rancher/steve/pkg/podimpersonation"
 	schema2 "github.com/rancher/steve/pkg/schema"
 	steve "github.com/rancher/steve/pkg/server"
-	"github.com/rancher/wrangler/pkg/schemas"
-	"github.com/rancher/wrangler/pkg/schemas/validation"
+	"github.com/rancher/wrangler/v3/pkg/schemas"
+	"github.com/rancher/wrangler/v3/pkg/schemas/validation"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -38,6 +38,8 @@ func Register(ctx context.Context, server *steve.Server, wrangler *wrangler.Cont
 	if err != nil {
 		return err
 	}
+
+	sc.Wrangler = wrangler
 
 	userManager, err := common.NewUserManagerNoBindings(sc)
 	if err != nil {

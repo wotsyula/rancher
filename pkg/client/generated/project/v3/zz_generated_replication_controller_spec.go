@@ -3,6 +3,7 @@ package client
 const (
 	ReplicationControllerSpecType                               = "replicationControllerSpec"
 	ReplicationControllerSpecFieldActiveDeadlineSeconds         = "activeDeadlineSeconds"
+	ReplicationControllerSpecFieldAppArmorProfile               = "appArmorProfile"
 	ReplicationControllerSpecFieldAutomountServiceAccountToken  = "automountServiceAccountToken"
 	ReplicationControllerSpecFieldContainers                    = "containers"
 	ReplicationControllerSpecFieldDNSConfig                     = "dnsConfig"
@@ -26,18 +27,21 @@ const (
 	ReplicationControllerSpecFieldPreemptionPolicy              = "preemptionPolicy"
 	ReplicationControllerSpecFieldReadinessGates                = "readinessGates"
 	ReplicationControllerSpecFieldReplicationControllerConfig   = "replicationControllerConfig"
+	ReplicationControllerSpecFieldResourceClaims                = "resourceClaims"
 	ReplicationControllerSpecFieldRestartPolicy                 = "restartPolicy"
 	ReplicationControllerSpecFieldRunAsGroup                    = "runAsGroup"
 	ReplicationControllerSpecFieldRunAsNonRoot                  = "runAsNonRoot"
 	ReplicationControllerSpecFieldRuntimeClassName              = "runtimeClassName"
 	ReplicationControllerSpecFieldScale                         = "scale"
 	ReplicationControllerSpecFieldScheduling                    = "scheduling"
+	ReplicationControllerSpecFieldSchedulingGates               = "schedulingGates"
 	ReplicationControllerSpecFieldSeccompProfile                = "seccompProfile"
 	ReplicationControllerSpecFieldSelector                      = "selector"
 	ReplicationControllerSpecFieldServiceAccountName            = "serviceAccountName"
 	ReplicationControllerSpecFieldSetHostnameAsFQDN             = "setHostnameAsFQDN"
 	ReplicationControllerSpecFieldShareProcessNamespace         = "shareProcessNamespace"
 	ReplicationControllerSpecFieldSubdomain                     = "subdomain"
+	ReplicationControllerSpecFieldSupplementalGroupsPolicy      = "supplementalGroupsPolicy"
 	ReplicationControllerSpecFieldSysctls                       = "sysctls"
 	ReplicationControllerSpecFieldTerminationGracePeriodSeconds = "terminationGracePeriodSeconds"
 	ReplicationControllerSpecFieldTopologySpreadConstraints     = "topologySpreadConstraints"
@@ -48,6 +52,7 @@ const (
 
 type ReplicationControllerSpec struct {
 	ActiveDeadlineSeconds         *int64                         `json:"activeDeadlineSeconds,omitempty" yaml:"activeDeadlineSeconds,omitempty"`
+	AppArmorProfile               *AppArmorProfile               `json:"appArmorProfile,omitempty" yaml:"appArmorProfile,omitempty"`
 	AutomountServiceAccountToken  *bool                          `json:"automountServiceAccountToken,omitempty" yaml:"automountServiceAccountToken,omitempty"`
 	Containers                    []Container                    `json:"containers,omitempty" yaml:"containers,omitempty"`
 	DNSConfig                     *PodDNSConfig                  `json:"dnsConfig,omitempty" yaml:"dnsConfig,omitempty"`
@@ -71,18 +76,21 @@ type ReplicationControllerSpec struct {
 	PreemptionPolicy              string                         `json:"preemptionPolicy,omitempty" yaml:"preemptionPolicy,omitempty"`
 	ReadinessGates                []PodReadinessGate             `json:"readinessGates,omitempty" yaml:"readinessGates,omitempty"`
 	ReplicationControllerConfig   *ReplicationControllerConfig   `json:"replicationControllerConfig,omitempty" yaml:"replicationControllerConfig,omitempty"`
+	ResourceClaims                []PodResourceClaim             `json:"resourceClaims,omitempty" yaml:"resourceClaims,omitempty"`
 	RestartPolicy                 string                         `json:"restartPolicy,omitempty" yaml:"restartPolicy,omitempty"`
 	RunAsGroup                    *int64                         `json:"runAsGroup,omitempty" yaml:"runAsGroup,omitempty"`
 	RunAsNonRoot                  *bool                          `json:"runAsNonRoot,omitempty" yaml:"runAsNonRoot,omitempty"`
 	RuntimeClassName              string                         `json:"runtimeClassName,omitempty" yaml:"runtimeClassName,omitempty"`
 	Scale                         *int64                         `json:"scale,omitempty" yaml:"scale,omitempty"`
 	Scheduling                    *Scheduling                    `json:"scheduling,omitempty" yaml:"scheduling,omitempty"`
+	SchedulingGates               []PodSchedulingGate            `json:"schedulingGates,omitempty" yaml:"schedulingGates,omitempty"`
 	SeccompProfile                *SeccompProfile                `json:"seccompProfile,omitempty" yaml:"seccompProfile,omitempty"`
 	Selector                      map[string]string              `json:"selector,omitempty" yaml:"selector,omitempty"`
 	ServiceAccountName            string                         `json:"serviceAccountName,omitempty" yaml:"serviceAccountName,omitempty"`
 	SetHostnameAsFQDN             *bool                          `json:"setHostnameAsFQDN,omitempty" yaml:"setHostnameAsFQDN,omitempty"`
 	ShareProcessNamespace         *bool                          `json:"shareProcessNamespace,omitempty" yaml:"shareProcessNamespace,omitempty"`
 	Subdomain                     string                         `json:"subdomain,omitempty" yaml:"subdomain,omitempty"`
+	SupplementalGroupsPolicy      string                         `json:"supplementalGroupsPolicy,omitempty" yaml:"supplementalGroupsPolicy,omitempty"`
 	Sysctls                       []Sysctl                       `json:"sysctls,omitempty" yaml:"sysctls,omitempty"`
 	TerminationGracePeriodSeconds *int64                         `json:"terminationGracePeriodSeconds,omitempty" yaml:"terminationGracePeriodSeconds,omitempty"`
 	TopologySpreadConstraints     []TopologySpreadConstraint     `json:"topologySpreadConstraints,omitempty" yaml:"topologySpreadConstraints,omitempty"`

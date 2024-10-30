@@ -5,12 +5,14 @@ package config
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/rancher/lasso/pkg/cache"
 	"github.com/rancher/lasso/pkg/client"
 	"github.com/rancher/lasso/pkg/controller"
+	"github.com/rancher/lasso/pkg/metrics"
 	"github.com/rancher/norman/objectclient/dynamic"
 	"github.com/rancher/norman/restwatch"
 	"github.com/rancher/norman/store/proxy"
@@ -20,15 +22,13 @@ import (
 	"github.com/rancher/rancher/pkg/generated/controllers/catalog.cattle.io"
 	apiregistrationv1 "github.com/rancher/rancher/pkg/generated/norman/apiregistration.k8s.io/v1"
 	appsv1 "github.com/rancher/rancher/pkg/generated/norman/apps/v1"
-	autoscaling "github.com/rancher/rancher/pkg/generated/norman/autoscaling/v2beta2"
+	autoscaling "github.com/rancher/rancher/pkg/generated/norman/autoscaling/v2"
 	batchv1 "github.com/rancher/rancher/pkg/generated/norman/batch/v1"
 	clusterv3 "github.com/rancher/rancher/pkg/generated/norman/cluster.cattle.io/v3"
 	corev1 "github.com/rancher/rancher/pkg/generated/norman/core/v1"
 	extv1beta1 "github.com/rancher/rancher/pkg/generated/norman/extensions/v1beta1"
 	managementv3 "github.com/rancher/rancher/pkg/generated/norman/management.cattle.io/v3"
-	monitoringv1 "github.com/rancher/rancher/pkg/generated/norman/monitoring.coreos.com/v1"
 	knetworkingv1 "github.com/rancher/rancher/pkg/generated/norman/networking.k8s.io/v1"
-	policyv1beta1 "github.com/rancher/rancher/pkg/generated/norman/policy/v1beta1"
 	projectv3 "github.com/rancher/rancher/pkg/generated/norman/project.cattle.io/v3"
 	rbacv1 "github.com/rancher/rancher/pkg/generated/norman/rbac.authorization.k8s.io/v1"
 	storagev1 "github.com/rancher/rancher/pkg/generated/norman/storage.k8s.io/v1"
@@ -36,14 +36,17 @@ import (
 	clusterSchema "github.com/rancher/rancher/pkg/schemas/cluster.cattle.io/v3"
 	managementSchema "github.com/rancher/rancher/pkg/schemas/management.cattle.io/v3"
 	projectSchema "github.com/rancher/rancher/pkg/schemas/project.cattle.io/v3"
+	"github.com/rancher/rancher/pkg/settings"
 	"github.com/rancher/rancher/pkg/types/config/dialer"
 	"github.com/rancher/rancher/pkg/types/config/systemtokens"
 	"github.com/rancher/rancher/pkg/user"
 	"github.com/rancher/rancher/pkg/wrangler"
 	steve "github.com/rancher/steve/pkg/server"
-	"github.com/rancher/wrangler/pkg/generated/controllers/rbac"
-	wrbacv1 "github.com/rancher/wrangler/pkg/generated/controllers/rbac/v1"
-	"github.com/rancher/wrangler/pkg/generic"
+	"github.com/rancher/wrangler/v3/pkg/generated/controllers/core"
+	wcorev1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
+	"github.com/rancher/wrangler/v3/pkg/generated/controllers/rbac"
+	wrbacv1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/rbac/v1"
+	"github.com/rancher/wrangler/v3/pkg/generic"
 	"github.com/sirupsen/logrus"
 	"k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -134,34 +137,16 @@ func NewScaledContext(config rest.Config, opts *ScaleContextOptions) (*ScaledCon
 		context.ControllerFactory = opts.ControllerFactory
 	}
 
-	context.Management, err = managementv3.NewFromControllerFactory(context.ControllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.Project, err = projectv3.NewFromControllerFactory(context.ControllerFactory)
-	if err != nil {
-		return nil, err
-	}
+	context.Management = managementv3.NewFromControllerFactory(context.ControllerFactory)
+	context.Project = projectv3.NewFromControllerFactory(context.ControllerFactory)
+	context.RBAC = rbacv1.NewFromControllerFactory(context.ControllerFactory)
+	context.Core = corev1.NewFromControllerFactory(context.ControllerFactory)
 
 	context.K8sClient, err = kubernetes.NewForConfig(&config)
 	if err != nil {
 		return nil, err
 	}
 
-	context.RBAC, err = rbacv1.NewFromControllerFactory(context.ControllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.Core, err = corev1.NewFromControllerFactory(context.ControllerFactory)
-	if err != nil {
-		return nil, err
-	}
-	context.Project, err = projectv3.NewFromControllerFactory(context.ControllerFactory)
-	if err != nil {
-		return nil, err
-	}
 	dynamicConfig := config
 	if dynamicConfig.NegotiatedSerializer == nil {
 		dynamicConfig.NegotiatedSerializer = dynamic.NegotiatedSerializer
@@ -187,6 +172,7 @@ func NewScaledContext(config rest.Config, opts *ScaleContextOptions) (*ScaledCon
 
 func (c *ScaledContext) Start(ctx context.Context) error {
 	logrus.Info("Starting API controllers")
+	ctx = metrics.WithContextID(ctx, "scaledcontext")
 	return c.ControllerFactory.Start(ctx, 50)
 }
 
@@ -233,13 +219,28 @@ type UserContext struct {
 	Extensions     extv1beta1.Interface
 	BatchV1        batchv1.Interface
 	Networking     knetworkingv1.Interface
-	Monitoring     monitoringv1.Interface
 	Cluster        clusterv3.Interface
 	Storage        storagev1.Interface
-	Policy         policyv1beta1.Interface
 
 	RBACw          wrbacv1.Interface
+	Corew          wcorev1.Interface
 	KindNamespaces map[schema.GroupVersionKind]string
+}
+
+// WithAgent returns a shallow copy of the Context that has been configured to use a user agent in its
+// clients that is the given userAgent appended to "rancher-%s-%s".
+func (c *ManagementContext) WithAgent(userAgent string) *ManagementContext {
+	mgmtCopy := *c
+	fullUserAgent := fmt.Sprintf("rancher-%s-%s", settings.ServerVersion.Get(), userAgent)
+	mgmtCopy.Management = managementv3.NewFromControllerFactoryWithAgent(fullUserAgent, c.ControllerFactory)
+	mgmtCopy.Project = projectv3.NewFromControllerFactoryWithAgent(fullUserAgent, c.ControllerFactory)
+	mgmtCopy.RBAC = rbacv1.NewFromControllerFactoryWithAgent(fullUserAgent, c.ControllerFactory)
+	mgmtCopy.Core = corev1.NewFromControllerFactoryWithAgent(fullUserAgent, c.ControllerFactory)
+	mgmtCopy.Apps = appsv1.NewFromControllerFactoryWithAgent(fullUserAgent, c.ControllerFactory)
+
+	mgmtCopy.Wrangler = mgmtCopy.Wrangler.WithAgent(userAgent)
+
+	return &mgmtCopy
 }
 
 func (w *UserContext) DeferredStart(ctx context.Context, register func(ctx context.Context) error) func() error {
@@ -305,10 +306,8 @@ func (w *UserContext) UserOnlyContext() *UserOnlyContext {
 		Extensions:  w.Extensions,
 		Networking:  w.Networking,
 		BatchV1:     w.BatchV1,
-		Monitoring:  w.Monitoring,
 		Cluster:     w.Cluster,
 		Storage:     w.Storage,
-		Policy:      w.Policy,
 	}
 }
 
@@ -329,10 +328,8 @@ type UserOnlyContext struct {
 	Extensions      extv1beta1.Interface
 	BatchV1         batchv1.Interface
 	Networking      knetworkingv1.Interface
-	Monitoring      monitoringv1.Interface
 	Cluster         clusterv3.Interface
 	Storage         storagev1.Interface
-	Policy          policyv1beta1.Interface
 }
 
 func newManagementContext(c *ScaledContext) (*ManagementContext, error) {
@@ -346,15 +343,11 @@ func newManagementContext(c *ScaledContext) (*ManagementContext, error) {
 	controllerFactory := c.ControllerFactory
 	context.ControllerFactory = controllerFactory
 
-	context.Management, err = managementv3.NewFromControllerFactory(controllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.Project, err = projectv3.NewFromControllerFactory(controllerFactory)
-	if err != nil {
-		return nil, err
-	}
+	context.Management = managementv3.NewFromControllerFactory(controllerFactory)
+	context.Project = projectv3.NewFromControllerFactory(controllerFactory)
+	context.RBAC = rbacv1.NewFromControllerFactory(controllerFactory)
+	context.Core = corev1.NewFromControllerFactory(controllerFactory)
+	context.Apps = appsv1.NewFromControllerFactory(controllerFactory)
 
 	context.K8sClient, err = kubernetes.NewForConfig(&config)
 	if err != nil {
@@ -362,24 +355,6 @@ func newManagementContext(c *ScaledContext) (*ManagementContext, error) {
 	}
 
 	context.DynamicClient, err = k8dynamic.NewForConfig(&config)
-	if err != nil {
-		return nil, err
-	}
-
-	context.RBAC, err = rbacv1.NewFromControllerFactory(controllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.Core, err = corev1.NewFromControllerFactory(controllerFactory)
-	if err != nil {
-		return nil, err
-	}
-	context.Apps, err = appsv1.NewFromControllerFactory(controllerFactory)
-	if err != nil {
-		return nil, err
-	}
-	context.Project, err = projectv3.NewFromControllerFactory(controllerFactory)
 	if err != nil {
 		return nil, err
 	}
@@ -442,70 +417,17 @@ func NewUserContext(scaledContext *ScaledContext, config rest.Config, clusterNam
 		return nil, err
 	}
 
-	context.Apps, err = appsv1.NewFromControllerFactory(controllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.Core, err = corev1.NewFromControllerFactory(controllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.Project, err = projectv3.NewFromControllerFactory(controllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.Storage, err = storagev1.NewFromControllerFactory(controllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.RBAC, err = rbacv1.NewFromControllerFactory(controllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.Networking, err = knetworkingv1.NewFromControllerFactory(controllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.Extensions, err = extv1beta1.NewFromControllerFactory(controllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.Policy, err = policyv1beta1.NewFromControllerFactory(controllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.BatchV1, err = batchv1.NewFromControllerFactory(controllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.Autoscaling, err = autoscaling.NewFromControllerFactory(controllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.Monitoring, err = monitoringv1.NewFromControllerFactory(controllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.Cluster, err = clusterv3.NewFromControllerFactory(controllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.APIAggregation, err = apiregistrationv1.NewFromControllerFactory(controllerFactory)
-	if err != nil {
-		return nil, err
-	}
+	context.Apps = appsv1.NewFromControllerFactory(controllerFactory)
+	context.Core = corev1.NewFromControllerFactory(controllerFactory)
+	context.Project = projectv3.NewFromControllerFactory(controllerFactory)
+	context.Storage = storagev1.NewFromControllerFactory(controllerFactory)
+	context.RBAC = rbacv1.NewFromControllerFactory(controllerFactory)
+	context.Networking = knetworkingv1.NewFromControllerFactory(controllerFactory)
+	context.Extensions = extv1beta1.NewFromControllerFactory(controllerFactory)
+	context.BatchV1 = batchv1.NewFromControllerFactory(controllerFactory)
+	context.Autoscaling = autoscaling.NewFromControllerFactory(controllerFactory)
+	context.Cluster = clusterv3.NewFromControllerFactory(controllerFactory)
+	context.APIAggregation = apiregistrationv1.NewFromControllerFactory(controllerFactory)
 
 	wranglerConf := config
 	wranglerConf.Timeout = 30 * time.Minute
@@ -517,6 +439,11 @@ func NewUserContext(scaledContext *ScaledContext, config rest.Config, clusterNam
 		return nil, err
 	}
 	context.RBACw = rbacw.Rbac().V1()
+	corew, err := core.NewFactoryFromConfigWithOptions(&wranglerConf, opts)
+	if err != nil {
+		return nil, err
+	}
+	context.Corew = corew.Core().V1()
 
 	ctlg, err := catalog.NewFactoryFromConfigWithOptions(&context.RESTConfig, &catalog.FactoryOptions{SharedControllerFactory: controllerFactory})
 	if err != nil {
@@ -547,6 +474,7 @@ func (w *UserContext) Start(ctx context.Context) error {
 	if err := w.Management.ControllerFactory.Start(w.runContext, 50); err != nil {
 		return err
 	}
+	ctx = metrics.WithContextID(ctx, fmt.Sprintf("usercontext_%s", w.ClusterName))
 	return w.ControllerFactory.Start(ctx, 5)
 }
 
@@ -558,70 +486,17 @@ func NewUserOnlyContext(config *wrangler.Context) (*UserOnlyContext, error) {
 		K8sClient:         config.K8s,
 	}
 
-	context.Apps, err = appsv1.NewFromControllerFactory(context.ControllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.Core, err = corev1.NewFromControllerFactory(context.ControllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.Project, err = projectv3.NewFromControllerFactory(context.ControllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.Storage, err = storagev1.NewFromControllerFactory(context.ControllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.RBAC, err = rbacv1.NewFromControllerFactory(context.ControllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.Networking, err = knetworkingv1.NewFromControllerFactory(context.ControllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.Extensions, err = extv1beta1.NewFromControllerFactory(context.ControllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.Policy, err = policyv1beta1.NewFromControllerFactory(context.ControllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.BatchV1, err = batchv1.NewFromControllerFactory(context.ControllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.Autoscaling, err = autoscaling.NewFromControllerFactory(context.ControllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.Monitoring, err = monitoringv1.NewFromControllerFactory(context.ControllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.Cluster, err = clusterv3.NewFromControllerFactory(context.ControllerFactory)
-	if err != nil {
-		return nil, err
-	}
-
-	context.APIRegistration, err = apiregistrationv1.NewFromControllerFactory(context.ControllerFactory)
-	if err != nil {
-		return nil, err
-	}
+	context.Apps = appsv1.NewFromControllerFactory(context.ControllerFactory)
+	context.Core = corev1.NewFromControllerFactory(context.ControllerFactory)
+	context.Project = projectv3.NewFromControllerFactory(context.ControllerFactory)
+	context.Storage = storagev1.NewFromControllerFactory(context.ControllerFactory)
+	context.RBAC = rbacv1.NewFromControllerFactory(context.ControllerFactory)
+	context.Extensions = extv1beta1.NewFromControllerFactory(context.ControllerFactory)
+	context.BatchV1 = batchv1.NewFromControllerFactory(context.ControllerFactory)
+	context.Autoscaling = autoscaling.NewFromControllerFactory(context.ControllerFactory)
+	context.Cluster = clusterv3.NewFromControllerFactory(context.ControllerFactory)
+	context.APIRegistration = apiregistrationv1.NewFromControllerFactory(context.ControllerFactory)
+	context.Networking = knetworkingv1.NewFromControllerFactory(context.ControllerFactory)
 
 	dynamicConfig := context.RESTConfig
 	if dynamicConfig.NegotiatedSerializer == nil {
@@ -643,5 +518,6 @@ func NewUserOnlyContext(config *wrangler.Context) (*UserOnlyContext, error) {
 
 func (w *UserOnlyContext) Start(ctx context.Context) error {
 	logrus.Info("Starting workload controllers")
+	ctx = metrics.WithContextID(ctx, fmt.Sprintf("useronlycontext_%s", w.ClusterName))
 	return w.ControllerFactory.Start(ctx, 5)
 }

@@ -11,15 +11,15 @@ import (
 	"strings"
 	"time"
 
-	v32 "github.com/rancher/rancher/pkg/apis/project.cattle.io/v3"
-
 	errorsutil "github.com/pkg/errors"
+	v32 "github.com/rancher/rancher/pkg/apis/project.cattle.io/v3"
 	"github.com/rancher/rancher/pkg/auth/tokens"
 	"github.com/rancher/rancher/pkg/controllers/managementlegacy/compose/common"
 	hCommon "github.com/rancher/rancher/pkg/controllers/managementuserlegacy/helm/common"
 	corev1 "github.com/rancher/rancher/pkg/generated/norman/core/v1"
 	mgmtv3 "github.com/rancher/rancher/pkg/generated/norman/management.cattle.io/v3"
 	v3 "github.com/rancher/rancher/pkg/generated/norman/project.cattle.io/v3"
+	"github.com/rancher/rancher/pkg/jailer"
 	"github.com/rancher/rancher/pkg/ref"
 	"github.com/rancher/rancher/pkg/systemaccount"
 	"github.com/rancher/rancher/pkg/types/config"
@@ -324,9 +324,9 @@ func (l *Lifecycle) Remove(obj *v3.App) (runtime.Object, error) {
 		}
 		return obj, err
 	}
-	appIds := strings.Split(ns.Annotations[AppIDsLabel], ",")
+	appIDs := strings.Split(ns.Annotations[AppIDsLabel], ",")
 	appAnno := ""
-	for _, appID := range appIds {
+	for _, appID := range appIDs {
 		if appID == obj.Name {
 			continue
 		}
@@ -456,6 +456,12 @@ func (l *Lifecycle) writeKubeConfig(obj *v3.App, kubePath string, remove bool) (
 
 	if err := clientcmd.WriteToFile(*kubeConfig, kubePath); err != nil {
 		return "", err
+	}
+	if os.Getenv("CATTLE_DEV_MODE") == "" {
+		err := jailer.SetJailOwnership(kubePath)
+		if err != nil {
+			return "", err
+		}
 	}
 	tokenID, _ := tokens.SplitTokenParts(token)
 	return tokenID, nil

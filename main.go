@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"net/http"
 	_ "net/http/pprof"
@@ -16,7 +15,7 @@ import (
 	"github.com/rancher/rancher/pkg/logserver"
 	"github.com/rancher/rancher/pkg/rancher"
 	"github.com/rancher/rancher/pkg/version"
-	"github.com/rancher/wrangler/pkg/signals"
+	"github.com/rancher/wrangler/v3/pkg/signals"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
 )
@@ -40,13 +39,7 @@ func main() {
 		if dir, err := os.Getwd(); err == nil {
 			dmPath := filepath.Join(dir, "management-state", "bin")
 			os.MkdirAll(dmPath, 0700)
-			newPath := fmt.Sprintf("%s%s%s", dmPath, string(os.PathListSeparator), os.Getenv("PATH"))
-
-			os.Setenv("PATH", newPath)
 		}
-	} else {
-		newPath := fmt.Sprintf("%s%s%s", "/opt/drivers/management-state/bin", string(os.PathListSeparator), os.Getenv("PATH"))
-		os.Setenv("PATH", newPath)
 	}
 
 	var config rancher.Options

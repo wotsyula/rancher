@@ -1,4 +1,5 @@
 TARGETS := $(shell ls scripts)
+DEV_TARGETS := $(shell ls dev-scripts)
 
 .dapper:
 	@echo Downloading dapper
@@ -8,7 +9,7 @@ TARGETS := $(shell ls scripts)
 	@mv .dapper.tmp .dapper
 
 $(TARGETS): .dapper
-	@if [ "$@" = "post-release-checks" ] || [ "$@" = "list-gomod-updates" ] || [ "$@" = "check-chart-kdm-source-values" ]; then \
+	@if [ "$@" = "check-chart-kdm-source-values" ]; then \
 		./.dapper -q --no-out $@; \
 	else \
 		./.dapper $@; \
@@ -16,4 +17,7 @@ $(TARGETS): .dapper
 
 .DEFAULT_GOAL := ci
 
-.PHONY: $(TARGETS)
+$(DEV_TARGETS):
+	./dev-scripts/$@
+
+.PHONY: $(TARGETS) $(DEV_TARGETS)

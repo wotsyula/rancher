@@ -17,13 +17,14 @@ import (
 	"github.com/rancher/dynamiclistener/cert"
 	"github.com/rancher/dynamiclistener/server"
 	"github.com/rancher/dynamiclistener/storage/kubernetes"
+	"github.com/rancher/lasso/pkg/metrics"
 	"github.com/rancher/norman/types/convert"
 	"github.com/rancher/rancher/pkg/namespace"
 	"github.com/rancher/rancher/pkg/settings"
-	"github.com/rancher/wrangler/pkg/generated/controllers/apps"
-	appscontrollers "github.com/rancher/wrangler/pkg/generated/controllers/apps/v1"
-	"github.com/rancher/wrangler/pkg/generated/controllers/core"
-	corev1controllers "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
+	"github.com/rancher/wrangler/v3/pkg/generated/controllers/apps"
+	appscontrollers "github.com/rancher/wrangler/v3/pkg/generated/controllers/apps/v1"
+	"github.com/rancher/wrangler/v3/pkg/generated/controllers/core"
+	corev1controllers "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
 	"github.com/sirupsen/logrus"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -70,6 +71,7 @@ func ListenAndServe(ctx context.Context, restConfig *rest.Config, handler http.H
 			return errors.Wrap(err, "failed to setup TLS listener")
 		}
 	}
+	opts.DisplayServerLogs = true
 
 	opts.BindHost = bindHost
 
@@ -109,6 +111,7 @@ func ListenAndServe(ctx context.Context, restConfig *rest.Config, handler http.H
 		CANamespace:   namespace.System,
 		CertNamespace: namespace.System,
 		CertName:      "tls-rancher-internal",
+		DisplayServerLogs: true,
 	}
 	clusterIP, err := getClusterIP(core.Core().V1().Service())
 	if err != nil {
@@ -142,6 +145,7 @@ func ListenAndServe(ctx context.Context, restConfig *rest.Config, handler http.H
 		return errors.Wrap(err, "failed to ListenAndServe for fleet")
 	}
 
+	ctx = metrics.WithContextID(ctx, "tlscontext")
 	if err := core.Start(ctx, 5); err != nil {
 		return err
 	}
@@ -223,7 +227,7 @@ func readConfig(secrets corev1controllers.SecretController, acmeDomains []string
 		err error
 	)
 
-	tlsConfig, err := BaseTLSConfig()
+	tlsConfig, err := baseTLSConfig(settings.TLSMinVersion.Get(), settings.TLSCiphers.Get())
 	if err != nil {
 		return "", noCACerts, nil, err
 	}

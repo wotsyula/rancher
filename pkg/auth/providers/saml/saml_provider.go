@@ -2,16 +2,16 @@ package saml
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 
-	v32 "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
-
 	"github.com/crewjam/saml"
-	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
+	"github.com/rancher/norman/httperror"
 	"github.com/rancher/norman/types"
+	v32 "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
 	"github.com/rancher/rancher/pkg/auth/api/secrets"
 	"github.com/rancher/rancher/pkg/auth/providers/common"
 	"github.com/rancher/rancher/pkg/auth/providers/ldap"
@@ -50,6 +50,8 @@ type Provider struct {
 	groupType       string
 	clientState     ClientState
 	ldapProvider    common.AuthProvider
+	sloEnabled      bool
+	sloForced       bool
 }
 
 var SamlProviders = make(map[string]*Provider)
@@ -105,6 +107,85 @@ func (s *Provider) AuthenticateUser(ctx context.Context, input interface{}) (v3.
 	return v3.Principal{}, nil, "", fmt.Errorf("SAML providers do not implement Authenticate User API")
 }
 
+// Logout guards against a regular logout when the system has SLO, i.e. LogoutAll forced.
+func (s *Provider) Logout(apiContext *types.APIContext, token *v3.Token) error {
+	providerName := token.AuthProvider
+
+	logrus.Debugf("SAML [logout]: triggered by provider %s", providerName)
+
+	provider, ok := SamlProviders[providerName]
+	if !ok {
+		logrus.Debugf("SAML [logout]: Rancher provider resource `%v` not configured at all", providerName)
+		return fmt.Errorf("SAML [logout]: Rancher provider resource `%v` not configured at all", providerName)
+	}
+
+	if provider.sloForced {
+		logrus.Debugf("SAML [logout]: Rancher provider resource `%v` configured for forced SLO, rejecting regular logout", providerName)
+		return fmt.Errorf("SAML [logout]: Rancher provider resource `%v` configured for forced SLO, rejecting regular logout", providerName)
+	}
+
+	return nil
+}
+
+func (s *Provider) LogoutAll(apiContext *types.APIContext, token *v3.Token) error {
+	providerName := token.AuthProvider
+
+	logrus.Debugf("SAML [logout-all]: triggered by provider %s", providerName)
+
+	provider, ok := SamlProviders[providerName]
+	if !ok {
+		logrus.Debugf("SAML [logout-all]: Rancher provider resource `%v` not configured at all", providerName)
+		return fmt.Errorf("SAML [logout-all]: Rancher provider resource `%v` not configured at all", providerName)
+	}
+
+	if !provider.sloEnabled {
+		logrus.Debugf("SAML [logout-all]: Rancher provider resource `%v` not configured for SLO", providerName)
+		return fmt.Errorf("SAML [logout-all]: Rancher provider resource `%v` not configured for SLO", providerName)
+	}
+
+	samlLogout := &v32.SamlConfigLogoutInput{}
+
+	r := apiContext.Request
+	if err := json.NewDecoder(r.Body).Decode(samlLogout); err != nil {
+		return httperror.NewAPIError(httperror.InvalidBodyContent,
+			fmt.Sprintf("SAML: Failed to parse body: %v", err))
+	}
+
+	userName := provider.userMGR.GetUser(apiContext)
+	userAttributes, _, err := provider.tokenMGR.EnsureAndGetUserAttribute(userName)
+	if err != nil {
+		return err
+	}
+
+	usernames, ok := userAttributes.ExtraByProvider[providerName]["username"]
+	if len(usernames) == 0 {
+		return fmt.Errorf("SAML [logout-all]: UserAttribute extras contains no username for provider %q", providerName)
+	}
+	userAtProvider := usernames[0]
+	finalRedirectURL := samlLogout.FinalRedirectURL
+
+	w := apiContext.Response
+	provider.clientState.SetPath(provider.serviceProvider.SloURL.Path)
+	provider.clientState.SetState(w, r, "Rancher_FinalRedirectURL", finalRedirectURL)
+	provider.clientState.SetState(w, r, "Rancher_UserID", userName)
+	provider.clientState.SetState(w, r, "Rancher_Action", "logout-all")
+
+	idpRedirectURL, err := provider.HandleSamlLogout(userAtProvider, w, r)
+	if err != nil {
+		return err
+	}
+
+	logrus.Debugf("SAML [logout-all]: Redirecting to the identity provider logout page at %v", idpRedirectURL)
+
+	data := map[string]interface{}{
+		"idpRedirectUrl": idpRedirectURL,
+		"type":           "samlConfigLogoutOutput",
+	}
+
+	apiContext.WriteResponse(http.StatusOK, data)
+	return nil
+}
+
 func PerformSamlLogin(name string, apiContext *types.APIContext, input interface{}) error {
 	//input will contain the FINAL redirect URL
 	login, ok := input.(*v32.SamlLoginInput)
@@ -113,16 +194,19 @@ func PerformSamlLogin(name string, apiContext *types.APIContext, input interface
 	}
 	finalRedirectURL := login.FinalRedirectURL
 
+	logrus.Debugf("SAML [PerformSamlLogin]: Id Provider            (%v)", name)
+
 	if provider, ok := SamlProviders[name]; ok {
 		if provider == nil {
-			logrus.Errorf("SAML: Provider %v not initialized", name)
-			return fmt.Errorf("SAML: Provider %v not initialized", name)
+			logrus.Errorf("SAML: Rancher provider resource %v not initialized", name)
+			return fmt.Errorf("SAML: Rancher provider resource %v not initialized", name)
 		}
 		if provider.clientState == nil {
 			logrus.Errorf("SAML: Provider %v clientState not set", name)
 			return fmt.Errorf("SAML: Provider %v clientState not set", name)
 		}
-		logrus.Debugf("SAML [PerformSamlLogin]: Setting clientState for SAML service provider %v", name)
+
+		provider.clientState.SetPath(provider.serviceProvider.AcsURL.Path)
 		provider.clientState.SetState(apiContext.Response, apiContext.Request, "Rancher_FinalRedirectURL", finalRedirectURL)
 		provider.clientState.SetState(apiContext.Response, apiContext.Request, "Rancher_Action", loginAction)
 		provider.clientState.SetState(apiContext.Response, apiContext.Request, "Rancher_PublicKey", login.PublicKey)
@@ -138,8 +222,8 @@ func PerformSamlLogin(name string, apiContext *types.APIContext, input interface
 			"idpRedirectUrl": idpRedirectURL,
 			"type":           "samlLoginOutput",
 		}
-		apiContext.WriteResponse(http.StatusOK, data)
 
+		apiContext.WriteResponse(http.StatusOK, data)
 		return nil
 	}
 	return nil
@@ -158,20 +242,14 @@ func (s *Provider) getSamlConfig() (*v32.SamlConfig, error) {
 	storedSamlConfigMap := u.UnstructuredContent()
 
 	storedSamlConfig := &v32.SamlConfig{}
-	mapstructure.Decode(storedSamlConfigMap, storedSamlConfig)
+	err = common.Decode(storedSamlConfigMap, storedSamlConfig)
+	if err != nil {
+		return nil, fmt.Errorf("unable to decode Saml Config: %w", err)
+	}
 
 	if enabled, ok := storedSamlConfigMap["enabled"].(bool); ok {
 		storedSamlConfig.Enabled = enabled
 	}
-
-	metadataMap, ok := storedSamlConfigMap["metadata"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("SAML: failed to retrieve SamlConfig metadata, cannot read k8s Unstructured data")
-	}
-
-	objectMeta := &metav1.ObjectMeta{}
-	mapstructure.Decode(metadataMap, objectMeta)
-	storedSamlConfig.ObjectMeta = *objectMeta
 
 	if storedSamlConfig.SpKey != "" {
 		value, err := common.ReadFromSecret(s.secrets, storedSamlConfig.SpKey,
@@ -212,16 +290,30 @@ func (s *Provider) saveSamlConfig(config *v32.SamlConfig) error {
 	storedSamlConfig.Annotations = config.Annotations
 	config.ObjectMeta = storedSamlConfig.ObjectMeta
 
-	field := strings.ToLower(secrets.TypeToFields[configType][0])
-	if err := common.CreateOrUpdateSecrets(s.secrets, config.SpKey,
-		field, strings.ToLower(config.Type)); err != nil {
+	var field string
+	// This assumes the provider needs to create only one secret. If there are new entries
+	// in the secret collection, this code that creates the actual secrets would need to be updated.
+	if fields, ok := secrets.TypeToFields[configType]; ok && len(fields) > 0 {
+		field = strings.ToLower(fields[0])
+	}
+	spKey, err := common.CreateOrUpdateSecrets(s.secrets, config.SpKey,
+		field, strings.ToLower(config.Type))
+	if err != nil {
 		return err
 	}
 
-	config.SpKey = common.GetName(config.Type, field)
+	config.SpKey = spKey
+
 	if s.hasLdapGroupSearch() {
-		_, err = s.authConfigs.ObjectClient().Update(config.ObjectMeta.Name, s.combineSamlAndLdapConfig(config))
-		return err
+		combinedConfig, err := s.combineSamlAndLdapConfig(config)
+		if err != nil {
+			logrus.Warnf("problem combining saml and ldap config, saving partial configuration %s", err.Error())
+		}
+		_, err = s.authConfigs.ObjectClient().Update(config.ObjectMeta.Name, combinedConfig)
+		if err != nil {
+			return fmt.Errorf("unable to update authconfig: %w", err)
+		}
+		return nil
 	}
 
 	_, err = s.authConfigs.ObjectClient().Update(config.ObjectMeta.Name, config)
@@ -230,7 +322,7 @@ func (s *Provider) saveSamlConfig(config *v32.SamlConfig) error {
 
 func (s *Provider) toPrincipal(principalType string, princ v3.Principal, token *v3.Token) v3.Principal {
 	if principalType == s.userType {
-		princ.PrincipalType = "user"
+		princ.PrincipalType = common.UserPrincipalType
 		if token != nil {
 			princ.Me = s.isThisUserMe(token.UserPrincipal, princ)
 			if princ.Me {
@@ -239,7 +331,7 @@ func (s *Provider) toPrincipal(principalType string, princ v3.Principal, token *
 			}
 		}
 	} else {
-		princ.PrincipalType = "group"
+		princ.PrincipalType = common.GroupPrincipalType
 		if token != nil {
 			princ.MemberOf = s.tokenMGR.IsMemberOf(*token, princ)
 		}
@@ -252,6 +344,10 @@ func (s *Provider) RefetchGroupPrincipals(principalID string, secret string) ([]
 	return nil, errors.New("Not implemented")
 }
 
+// SearchPrincipals searches for a principal by name using LDAP if configured.
+// Otherwise it returns a "fake" principal of a requested type with the name as the searchKey.
+// If the principalType is empty, both user and group principals are returned.
+// This is done because SAML, in the absence of LDAP, doesn't have a user/group lookup mechanism.
 func (s *Provider) SearchPrincipals(searchKey, principalType string, token v3.Token) ([]v3.Principal, error) {
 	if s.hasLdapGroupSearch() {
 		principals, err := s.ldapProvider.SearchPrincipals(searchKey, principalType, token)
@@ -262,19 +358,27 @@ func (s *Provider) SearchPrincipals(searchKey, principalType string, token v3.To
 	}
 
 	var principals []v3.Principal
-	if principalType == "" {
-		principalType = "user"
+
+	if principalType != common.GroupPrincipalType {
+		principals = append(principals, v3.Principal{
+			ObjectMeta:    metav1.ObjectMeta{Name: s.userType + "://" + searchKey},
+			DisplayName:   searchKey,
+			LoginName:     searchKey,
+			PrincipalType: common.UserPrincipalType,
+			Provider:      s.name,
+		})
 	}
 
-	p := v3.Principal{
-		ObjectMeta:    metav1.ObjectMeta{Name: s.userType + "://" + searchKey},
-		DisplayName:   searchKey,
-		LoginName:     searchKey,
-		PrincipalType: principalType,
-		Provider:      s.name,
+	if principalType != common.UserPrincipalType {
+		principals = append(principals, v3.Principal{
+			ObjectMeta:    metav1.ObjectMeta{Name: s.groupType + "://" + searchKey},
+			DisplayName:   searchKey,
+			LoginName:     searchKey,
+			PrincipalType: common.GroupPrincipalType,
+			Provider:      s.name,
+		})
 	}
 
-	principals = append(principals, p)
 	return principals, nil
 }
 
@@ -354,7 +458,7 @@ func splitPrincipalID(principalID string) (string, string) {
 	return externalID, parts[0]
 }
 
-func (s *Provider) combineSamlAndLdapConfig(config *v32.SamlConfig) runtime.Object {
+func (s *Provider) combineSamlAndLdapConfig(config *v32.SamlConfig) (runtime.Object, error) {
 	// if errors we might not want to turn on ldap
 	ldapConfig, _, err := ldap.GetLDAPConfig(s.ldapProvider)
 
@@ -364,36 +468,50 @@ func (s *Provider) combineSamlAndLdapConfig(config *v32.SamlConfig) runtime.Obje
 
 		// if the the config subkey not in the crd
 		if ldapConfig == nil {
-			return config
+			return config, nil
 		}
 
 		// only return the saml config on other errors
 		// if not configured it might have data in it we want to keep
 		if !ldap.IsNotConfigured(err) {
-			return config
+			return config, nil
 		}
 	}
 
 	var fullConfig runtime.Object
 	samlConfig := v32.SamlConfig{}
 	config.DeepCopyInto(&samlConfig)
-
 	switch s.name {
 	case ShibbolethName:
+		secretName, err := common.SavePasswordSecret(
+			s.secrets,
+			ldapConfig.LdapFields.ServiceAccountPassword,
+			client.LdapConfigFieldServiceAccountPassword,
+			samlConfig.Type,
+		)
+		if err != nil {
+			return config, fmt.Errorf("unable to save ldap service account password: %w", err)
+		}
+
+		ldapConfig.LdapFields.ServiceAccountPassword = secretName
+		// Set the status for SecretsMigrated to True so it doesn't get re-migrated
+		v32.AuthConfigConditionSecretsMigrated.SetStatus(&samlConfig, "True")
 		fullConfig = &v32.ShibbolethConfig{
+			SamlConfig:     samlConfig,
+			OpenLdapConfig: ldapConfig.LdapFields,
+		}
+	case OKTAName:
+		fullConfig = &v32.OKTAConfig{
 			SamlConfig:     samlConfig,
 			OpenLdapConfig: ldapConfig.LdapFields,
 		}
 	}
 
-	return fullConfig
+	return fullConfig, nil
 }
 
 func (s *Provider) hasLdapGroupSearch() bool {
-	if s.name == ShibbolethName {
-		return true
-	}
-	return false
+	return ShibbolethName == s.name || OKTAName == s.name
 }
 
 func (s *Provider) GetUserExtraAttributes(userPrincipal v3.Principal) map[string][]string {
@@ -414,9 +532,4 @@ func (s *Provider) IsDisabledProvider() (bool, error) {
 		return false, err
 	}
 	return !samlConfig.Enabled, nil
-}
-
-// CleanupResources deletes resources associated with the SAML auth provider.
-func (s *Provider) CleanupResources(*v3.AuthConfig) error {
-	return nil
 }

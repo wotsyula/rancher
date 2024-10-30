@@ -9,7 +9,6 @@ import (
 	"github.com/rancher/norman/store/subtype"
 	"github.com/rancher/norman/store/transform"
 	"github.com/rancher/norman/types"
-	"github.com/rancher/rancher/pkg/api/norman/customization/alert"
 	"github.com/rancher/rancher/pkg/api/norman/customization/app"
 	"github.com/rancher/rancher/pkg/api/norman/customization/authn"
 	"github.com/rancher/rancher/pkg/api/norman/customization/catalog"
@@ -18,31 +17,26 @@ import (
 	"github.com/rancher/rancher/pkg/api/norman/customization/cred"
 	"github.com/rancher/rancher/pkg/api/norman/customization/etcdbackup"
 	"github.com/rancher/rancher/pkg/api/norman/customization/feature"
-	"github.com/rancher/rancher/pkg/api/norman/customization/globaldns"
 	"github.com/rancher/rancher/pkg/api/norman/customization/globalrole"
 	"github.com/rancher/rancher/pkg/api/norman/customization/globalrolebinding"
 	"github.com/rancher/rancher/pkg/api/norman/customization/kontainerdriver"
-	"github.com/rancher/rancher/pkg/api/norman/customization/monitor"
 	"github.com/rancher/rancher/pkg/api/norman/customization/multiclusterapp"
 	"github.com/rancher/rancher/pkg/api/norman/customization/namespacedresource"
 	"github.com/rancher/rancher/pkg/api/norman/customization/node"
 	"github.com/rancher/rancher/pkg/api/norman/customization/nodepool"
 	"github.com/rancher/rancher/pkg/api/norman/customization/nodetemplate"
-	psptBinding "github.com/rancher/rancher/pkg/api/norman/customization/podsecuritypolicybinding"
-	"github.com/rancher/rancher/pkg/api/norman/customization/podsecuritypolicytemplate"
+
 	projectaction "github.com/rancher/rancher/pkg/api/norman/customization/project"
 	"github.com/rancher/rancher/pkg/api/norman/customization/roletemplate"
 	"github.com/rancher/rancher/pkg/api/norman/customization/roletemplatebinding"
 	"github.com/rancher/rancher/pkg/api/norman/customization/secret"
 	"github.com/rancher/rancher/pkg/api/norman/customization/setting"
-	alertStore "github.com/rancher/rancher/pkg/api/norman/store/alert"
 	appStore "github.com/rancher/rancher/pkg/api/norman/store/app"
 	catalogStore "github.com/rancher/rancher/pkg/api/norman/store/catalog"
 	"github.com/rancher/rancher/pkg/api/norman/store/cert"
 	"github.com/rancher/rancher/pkg/api/norman/store/cluster"
 	clustertemplatestore "github.com/rancher/rancher/pkg/api/norman/store/clustertemplate"
 	featStore "github.com/rancher/rancher/pkg/api/norman/store/feature"
-	globaldnsAPIStore "github.com/rancher/rancher/pkg/api/norman/store/globaldns"
 	globalRoleStore "github.com/rancher/rancher/pkg/api/norman/store/globalrole"
 	grbstore "github.com/rancher/rancher/pkg/api/norman/store/globalrolebindings"
 	nodeStore "github.com/rancher/rancher/pkg/api/norman/store/node"
@@ -62,7 +56,7 @@ import (
 	projectclient "github.com/rancher/rancher/pkg/client/generated/project/v3"
 	"github.com/rancher/rancher/pkg/clustermanager"
 	"github.com/rancher/rancher/pkg/clusterrouter"
-	md "github.com/rancher/rancher/pkg/controllers/management/kontainerdrivermetadata"
+	md "github.com/rancher/rancher/pkg/kontainerdrivermetadata"
 	"github.com/rancher/rancher/pkg/namespace"
 	"github.com/rancher/rancher/pkg/nodeconfig"
 	managementschema "github.com/rancher/rancher/pkg/schemas/management.cattle.io/v3"
@@ -96,8 +90,6 @@ func Setup(ctx context.Context, apiContext *config.ScaledContext, clusterManager
 		client.NodeTemplateType,
 		client.NodeType,
 		client.PodSecurityAdmissionConfigurationTemplateType,
-		client.PodSecurityPolicyTemplateProjectBindingType,
-		client.PodSecurityPolicyTemplateType,
 		client.PreferenceType,
 		client.ProjectNetworkPolicyType,
 		client.ProjectRoleTemplateBindingType,
@@ -119,26 +111,14 @@ func Setup(ctx context.Context, apiContext *config.ScaledContext, clusterManager
 		client.CatalogType,
 		client.CatalogTemplateType,
 		client.CatalogTemplateVersionType,
-		client.ClusterAlertType,
-		client.ClusterAlertGroupType,
 		client.ClusterCatalogType,
-		client.ClusterAlertRuleType,
-		client.ClusterMonitorGraphType,
 		client.ComposeConfigType,
 		client.MultiClusterAppType,
 		client.MultiClusterAppRevisionType,
-		client.MonitorMetricType,
-		client.NotifierType,
-		client.ProjectAlertType,
-		client.ProjectAlertGroupType,
 		client.ProjectCatalogType,
-		client.ProjectAlertRuleType,
-		client.ProjectMonitorGraphType,
 		client.TemplateType,
 		client.TemplateVersionType,
 		client.TemplateContentType,
-		client.GlobalDnsType,
-		client.GlobalDnsProviderType,
 		client.RancherUserNotificationType,
 	)
 
@@ -164,8 +144,6 @@ func Setup(ctx context.Context, apiContext *config.ScaledContext, clusterManager
 	Project(schemas, apiContext)
 	ProjectRoleTemplateBinding(schemas, apiContext)
 	PodSecurityAdmissionConfigurationTemplate(schemas, apiContext)
-	PodSecurityPolicyTemplate(schemas, apiContext)
-	PodSecurityPolicyTemplateProjectBinding(schemas, apiContext)
 	GlobalRole(schemas, apiContext)
 	GlobalRoleBindings(schemas, apiContext)
 	RoleTemplate(schemas, apiContext)
@@ -181,12 +159,8 @@ func Setup(ctx context.Context, apiContext *config.ScaledContext, clusterManager
 	ProjectCatalog(schemas, apiContext)
 	ClusterCatalog(schemas, apiContext)
 	App(schemas, apiContext, clusterManager)
-	Alert(schemas, apiContext)
 	TemplateContent(schemas)
-	Monitor(schemas, apiContext, clusterManager)
 	MultiClusterApps(schemas, apiContext)
-	GlobalDNSs(schemas, apiContext, localClusterEnabled)
-	GlobalDNSProviders(schemas, apiContext, localClusterEnabled)
 
 	if err := NodeTypes(schemas, apiContext); err != nil {
 		return err
@@ -201,7 +175,6 @@ func Setup(ctx context.Context, apiContext *config.ScaledContext, clusterManager
 	setupPasswordTypes(ctx, schemas, apiContext)
 
 	multiclusterapp.SetMemberStore(ctx, schemas.Schema(&managementschema.Version, client.MultiClusterAppType), apiContext)
-	GlobalDNSProvidersPwdWrap(schemas, apiContext, localClusterEnabled)
 
 	return nil
 }
@@ -460,6 +433,7 @@ func SecretTypes(ctx context.Context, schemas *types.Schemas, management *config
 		management.Core.Namespaces(""),
 		management.Management.NodeTemplates("").Controller().Lister(),
 		management.Wrangler.Provisioning.Cluster().Cache(),
+		management.Management.Tokens("").Controller().Lister(),
 	)
 	credSchema.Validator = cred.Validator
 }
@@ -548,83 +522,22 @@ func Feature(schemas *types.Schemas, management *config.ScaledContext) {
 	schema.Store = featStore.New(schema.Store)
 }
 
-func Alert(schemas *types.Schemas, management *config.ScaledContext) {
-	handler := &alert.Handler{
-		ClusterAlertRule: management.Management.ClusterAlertRules(""),
-		ProjectAlertRule: management.Management.ProjectAlertRules(""),
-		Notifiers:        management.Management.Notifiers(""),
-		DialerFactory:    management.Dialer,
-	}
-
-	schema := schemas.Schema(&managementschema.Version, client.NotifierType)
-	schema.CollectionFormatter = alert.NotifierCollectionFormatter
-	schema.Formatter = alert.NotifierFormatter
-	schema.ActionHandler = handler.NotifierActionHandler
-	schema.Store = alertStore.NewNotifier(management, schema.Store)
-
-	schema = schemas.Schema(&managementschema.Version, client.ClusterAlertRuleType)
-	schema.Formatter = alert.RuleFormatter
-	schema.Validator = alert.ClusterAlertRuleValidator
-	schema.ActionHandler = handler.ClusterAlertRuleActionHandler
-
-	schema = schemas.Schema(&managementschema.Version, client.ProjectAlertRuleType)
-	schema.Formatter = alert.RuleFormatter
-	schema.Validator = alert.ProjectAlertRuleValidator
-	schema.ActionHandler = handler.ProjectAlertRuleActionHandler
-
-	//old schema just for migrate
-	schema = schemas.Schema(&managementschema.Version, client.ClusterAlertType)
-	schema = schemas.Schema(&managementschema.Version, client.ProjectAlertType)
-}
-
-func Monitor(schemas *types.Schemas, management *config.ScaledContext, clusterManager *clustermanager.Manager) {
-	clusterGraphHandler := monitor.NewClusterGraphHandler(management.Dialer, clusterManager)
-	projectGraphHandler := monitor.NewProjectGraphHandler(management.Dialer, clusterManager)
-	metricHandler := monitor.NewMetricHandler(management.Dialer, clusterManager)
-
-	schema := schemas.Schema(&managementschema.Version, client.ClusterMonitorGraphType)
-	schema.CollectionFormatter = monitor.QueryGraphCollectionFormatter
-	schema.ActionHandler = clusterGraphHandler.QuerySeriesAction
-
-	schema = schemas.Schema(&managementschema.Version, client.ProjectMonitorGraphType)
-	schema.CollectionFormatter = monitor.QueryGraphCollectionFormatter
-	schema.ActionHandler = projectGraphHandler.QuerySeriesAction
-
-	schema = schemas.Schema(&managementschema.Version, client.MonitorMetricType)
-	schema.CollectionFormatter = monitor.MetricCollectionFormatter
-	schema.ActionHandler = metricHandler.Action
-}
-
 func Project(schemas *types.Schemas, management *config.ScaledContext) {
 	schema := schemas.Schema(&managementschema.Version, client.ProjectType)
 	schema.Formatter = projectaction.Formatter
 	handler := &projectaction.Handler{
-		Projects:          management.Management.Projects(""),
-		ProjectLister:     management.Management.Projects("").Controller().Lister(),
-		UserMgr:           management.UserManager,
-		ClusterManager:    management.ClientGetter.(*clustermanager.Manager),
-		ClusterLister:     management.Management.Clusters("").Controller().Lister(),
-		PSPTemplateLister: management.Management.PodSecurityPolicyTemplates("").Controller().Lister(),
+		Projects:                 management.Management.Projects(""),
+		ProjectLister:            management.Management.Projects("").Controller().Lister(),
+		UserMgr:                  management.UserManager,
+		ClusterManager:           management.ClientGetter.(*clustermanager.Manager),
+		ClusterLister:            management.Management.Clusters("").Controller().Lister(),
+		ProvisioningClusterCache: management.Wrangler.Provisioning.Cluster().Cache(),
 	}
 	schema.ActionHandler = handler.Actions
 }
 
 func PodSecurityAdmissionConfigurationTemplate(schemas *types.Schemas, management *config.ScaledContext) {
 	schemas.Schema(&managementschema.Version, client.PodSecurityAdmissionConfigurationTemplateType)
-}
-
-func PodSecurityPolicyTemplate(schemas *types.Schemas, management *config.ScaledContext) {
-	schema := schemas.Schema(&managementschema.Version, client.PodSecurityPolicyTemplateType)
-	schema.Formatter = podsecuritypolicytemplate.NewFormatter(management)
-	schema.Store = &podsecuritypolicytemplate.Store{
-		Store: schema.Store,
-	}
-	schema.Validator = podsecuritypolicytemplate.Validator
-}
-
-func PodSecurityPolicyTemplateProjectBinding(schemas *types.Schemas, management *config.ScaledContext) {
-	schema := schemas.Schema(&managementschema.Version, client.PodSecurityPolicyTemplateProjectBindingType)
-	schema.Validator = psptBinding.NewValidator(management)
 }
 
 func ClusterRoleTemplateBinding(schemas *types.Schemas, management *config.ScaledContext) {
@@ -668,14 +581,10 @@ func RoleTemplate(schemas *types.Schemas, management *config.ScaledContext) {
 func KontainerDriver(schemas *types.Schemas, management *config.ScaledContext) {
 	schema := schemas.Schema(&managementschema.Version, client.KontainerDriverType)
 	metadataHandler := md.MetadataController{
-		SystemImagesLister:   management.Management.RkeK8sSystemImages("").Controller().Lister(),
-		SystemImages:         management.Management.RkeK8sSystemImages(""),
-		ServiceOptionsLister: management.Management.RkeK8sServiceOptions("").Controller().Lister(),
-		ServiceOptions:       management.Management.RkeK8sServiceOptions(""),
-		AddonsLister:         management.Management.RkeAddons("").Controller().Lister(),
-		Addons:               management.Management.RkeAddons(""),
-		SettingLister:        management.Management.Settings("").Controller().Lister(),
-		Settings:             management.Management.Settings(""),
+		SystemImagesController:   management.Wrangler.Mgmt.RkeK8sSystemImage(),
+		ServiceOptionsController: management.Wrangler.Mgmt.RkeK8sServiceOption(),
+		Addons:                   management.Wrangler.Mgmt.RkeAddon(),
+		Settings:                 management.Wrangler.Mgmt.Setting(),
 	}
 
 	handler := kontainerdriver.ActionHandler{
@@ -727,43 +636,6 @@ func MultiClusterApps(schemas *types.Schemas, management *config.ScaledContext) 
 	schema.ActionHandler = wrapper.ActionHandler
 	schema.LinkHandler = wrapper.LinkHandler
 	schema.Validator = wrapper.Validator
-}
-
-func GlobalDNSs(schemas *types.Schemas, management *config.ScaledContext, localClusterEnabled bool) {
-	gdns := globaldns.Wrapper{
-		GlobalDNSes:           management.Management.GlobalDnses(""),
-		GlobalDNSLister:       management.Management.GlobalDnses("").Controller().Lister(),
-		PrtbLister:            management.Management.ProjectRoleTemplateBindings("").Controller().Lister(),
-		MultiClusterAppLister: management.Management.MultiClusterApps("").Controller().Lister(),
-		Users:                 management.Management.Users(""),
-		GrbLister:             management.Management.GlobalRoleBindings("").Controller().Lister(),
-		GrLister:              management.Management.GlobalRoles("").Controller().Lister(),
-	}
-	schema := schemas.Schema(&managementschema.Version, client.GlobalDnsType)
-	schema.Store = namespacedresource.Wrap(schema.Store, management.Core.Namespaces(""), namespace.GlobalNamespace)
-	schema.Formatter = gdns.Formatter
-	schema.ActionHandler = gdns.ActionHandler
-	schema.Validator = gdns.Validator
-	schema.Store = globaldnsAPIStore.Wrap(schema.Store)
-	if !localClusterEnabled {
-		schema.CollectionMethods = []string{}
-		schema.ResourceMethods = []string{}
-	}
-}
-
-func GlobalDNSProviders(schemas *types.Schemas, management *config.ScaledContext, localClusterEnabled bool) {
-	schema := schemas.Schema(&managementschema.Version, client.GlobalDnsProviderType)
-	schema.Store = namespacedresource.Wrap(schema.Store, management.Core.Namespaces(""), namespace.GlobalNamespace)
-	schema.Store = globaldnsAPIStore.ProviderWrap(schema.Store)
-	if !localClusterEnabled {
-		schema.CollectionMethods = []string{}
-		schema.ResourceMethods = []string{}
-	}
-}
-
-func GlobalDNSProvidersPwdWrap(schemas *types.Schemas, management *config.ScaledContext, localClusterEnabled bool) {
-	schema := schemas.Schema(&managementschema.Version, client.GlobalDnsProviderType)
-	schema.Store = globaldnsAPIStore.ProviderPwdWrap(schema.Store)
 }
 
 func ClusterTemplates(schemas *types.Schemas, management *config.ScaledContext) {

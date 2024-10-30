@@ -19,11 +19,12 @@ import (
 	"github.com/rancher/rancher/pkg/controllers/management/rbac"
 	"github.com/rancher/rancher/pkg/controllers/management/secretmigrator"
 	"github.com/rancher/rancher/pkg/dialer"
+	"github.com/rancher/rancher/pkg/kontainer-engine/drivers/util"
 	"github.com/rancher/rancher/pkg/namespace"
 	"github.com/rancher/rancher/pkg/systemaccount"
 	"github.com/rancher/rancher/pkg/types/config"
 	"github.com/rancher/rancher/pkg/wrangler"
-	corecontrollers "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
+	corecontrollers "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
 	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/api/errors"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/transport"
 )
 
 const (
@@ -193,6 +195,10 @@ func (e *aksOperatorController) onClusterChange(_ string, cluster *apimgmtv3.Clu
 					if err != nil {
 						return cluster, err
 					}
+					if secret == nil {
+						logrus.Debugf("Empty service account token secret returned for cluster [%s]", cluster.Name)
+						return cluster, fmt.Errorf("failed to create or update service account token secret, secret can't be empty")
+					}
 					cluster.Status.ServiceAccountTokenSecret = secret.Name
 					cluster.Status.ServiceAccountToken = ""
 				}
@@ -302,7 +308,10 @@ func (e *aksOperatorController) updateAKSClusterConfig(cluster *apimgmtv3.Cluste
 	for {
 		select {
 		case event := <-w.ResultChan():
-			aksClusterConfigDynamic = event.Object.(*unstructured.Unstructured)
+			var ok bool
+			if aksClusterConfigDynamic, ok = event.Object.(*unstructured.Unstructured); !ok {
+				return cluster, fmt.Errorf("unexpected nil cluster config")
+			}
 			status, _ := aksClusterConfigDynamic.Object["status"].(map[string]interface{})
 			if status["phase"] == "active" {
 				continue
@@ -323,18 +332,22 @@ func (e *aksOperatorController) updateAKSClusterConfig(cluster *apimgmtv3.Cluste
 
 // generateAndSetServiceAccount uses the API endpoint and CA cert to generate a service account token. The token is then copied to the cluster status.
 func (e *aksOperatorController) generateAndSetServiceAccount(cluster *apimgmtv3.Cluster) (*apimgmtv3.Cluster, error) {
+	clusterDialer, err := e.ClientDialer.ClusterDialHolder(cluster.Name, true)
+	if err != nil {
+		return cluster, err
+	}
+
 	restConfig, err := e.getRestConfig(cluster)
 	if err != nil {
 		return cluster, fmt.Errorf("error getting kube config: %v", err)
 	}
 
-	clusterDialer, err := e.ClientDialer.ClusterDialer(cluster.Name)
+	clientset, err := clusteroperator.NewClientSetForConfig(restConfig, clusteroperator.WithDialHolder(clusterDialer))
 	if err != nil {
-		return cluster, err
+		return nil, fmt.Errorf("error creating clientset for cluster %s: %w", cluster.Name, err)
 	}
 
-	restConfig.Dial = clusterDialer
-	saToken, err := clusteroperator.GenerateSAToken(restConfig)
+	saToken, err := util.GenerateServiceAccountToken(clientset, cluster.Name)
 	if err != nil {
 		return cluster, fmt.Errorf("error generating service account token: %v", err)
 	}
@@ -393,6 +406,13 @@ func (e *aksOperatorController) recordAppliedSpec(cluster *apimgmtv3.Cluster) (*
 	return e.ClusterClient.Update(cluster)
 }
 
+var publicDialer = &transport.DialHolder{
+	Dial: (&net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext,
+}
+
 // generateSATokenWithPublicAPI tries to get a service account token from the cluster using the public API endpoint.
 // This function is called if the cluster has only privateEndpoint enabled and is not publicly available.
 // If Rancher is able to communicate with the cluster through its API endpoint even though it is private, then this function will retrieve
@@ -410,12 +430,13 @@ func (e *aksOperatorController) generateSATokenWithPublicAPI(cluster *apimgmtv3.
 		return "", nil, err
 	}
 
+	clientset, err := clusteroperator.NewClientSetForConfig(restConfig, clusteroperator.WithDialHolder(publicDialer))
+	if err != nil {
+		return "", nil, fmt.Errorf("error creating clientset for cluster %s: %w", cluster.Name, err)
+	}
+
 	requiresTunnel := new(bool)
-	restConfig.Dial = (&net.Dialer{
-		Timeout:   30 * time.Second,
-		KeepAlive: 30 * time.Second,
-	}).DialContext
-	serviceToken, err := clusteroperator.GenerateSAToken(restConfig)
+	serviceToken, err := util.GenerateServiceAccountToken(clientset, cluster.Name)
 	if err != nil {
 		*requiresTunnel = true
 		var dnsError *net.DNSError
@@ -442,6 +463,9 @@ func (e *aksOperatorController) getRestConfig(cluster *apimgmtv3.Cluster) (*rest
 	restConfig, err := controller.GetClusterKubeConfig(ctx, e.SecretsCache, e.secretClient, cluster.Spec.AKSConfig)
 	if err != nil {
 		return nil, err
+	}
+	if restConfig.UserAgent == "" {
+		restConfig.UserAgent = util.UserAgentForCluster(cluster)
 	}
 
 	// Get the CACert from the cluster because it will have any additional CAs added to Rancher.

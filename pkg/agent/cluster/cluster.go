@@ -12,7 +12,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/rancher/rancher/pkg/namespace"
 	"github.com/rancher/rancher/pkg/serviceaccounttoken"
-	"github.com/rancher/wrangler/pkg/kubeconfig"
+	"github.com/rancher/wrangler/v3/pkg/kubeconfig"
 	coreV1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -49,6 +49,10 @@ func CAChecksum() string {
 	return os.Getenv("CATTLE_CA_CHECKSUM")
 }
 
+func CAStrictVerify() bool {
+	return strings.ToLower(os.Getenv("STRICT_VERIFY")) == "true"
+}
+
 func getTokenFromAPI() ([]byte, []byte, error) {
 	cfg, err := kubeconfig.GetNonInteractiveClientConfig("").ClientConfig()
 	if err != nil {
@@ -74,9 +78,9 @@ func getTokenFromAPI() ([]byte, []byte, error) {
 		}
 		return secret.Data[coreV1.ServiceAccountRootCAKey], secret.Data[coreV1.ServiceAccountTokenKey], nil
 	}
-	secret, err := serviceaccounttoken.CreateSecretForServiceAccount(context.Background(), k8s, sa)
+	secret, err := serviceaccounttoken.EnsureSecretForServiceAccount(context.Background(), nil, k8s, sa, "")
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create secret for service account %s/%s: %w", namespace.System, "cattle", err)
+		return nil, nil, fmt.Errorf("failed to ensure secret for service account %s/%s: %w", namespace.System, "cattle", err)
 	}
 	return []byte(cm.Data["ca.crt"]), []byte(secret.Data[coreV1.ServiceAccountTokenKey]), nil
 }

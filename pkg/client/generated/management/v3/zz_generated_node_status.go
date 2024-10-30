@@ -8,6 +8,7 @@ const (
 	NodeStatusFieldConditions         = "conditions"
 	NodeStatusFieldDockerInfo         = "dockerInfo"
 	NodeStatusFieldExternalIPAddress  = "externalIpAddress"
+	NodeStatusFieldFeatures           = "features"
 	NodeStatusFieldHostname           = "hostname"
 	NodeStatusFieldIPAddress          = "ipAddress"
 	NodeStatusFieldInfo               = "info"
@@ -19,6 +20,7 @@ const (
 	NodeStatusFieldNodePlan           = "nodePlan"
 	NodeStatusFieldNodeTaints         = "nodeTaints"
 	NodeStatusFieldRequested          = "requested"
+	NodeStatusFieldRuntimeHandlers    = "runtimeHandlers"
 	NodeStatusFieldVolumesAttached    = "volumesAttached"
 	NodeStatusFieldVolumesInUse       = "volumesInUse"
 )
@@ -30,6 +32,7 @@ type NodeStatus struct {
 	Conditions         []NodeCondition           `json:"conditions,omitempty" yaml:"conditions,omitempty"`
 	DockerInfo         *DockerInfo               `json:"dockerInfo,omitempty" yaml:"dockerInfo,omitempty"`
 	ExternalIPAddress  string                    `json:"externalIpAddress,omitempty" yaml:"externalIpAddress,omitempty"`
+	Features           *NodeFeatures             `json:"features,omitempty" yaml:"features,omitempty"`
 	Hostname           string                    `json:"hostname,omitempty" yaml:"hostname,omitempty"`
 	IPAddress          string                    `json:"ipAddress,omitempty" yaml:"ipAddress,omitempty"`
 	Info               *NodeInfo                 `json:"info,omitempty" yaml:"info,omitempty"`
@@ -41,6 +44,7 @@ type NodeStatus struct {
 	NodePlan           *NodePlan                 `json:"nodePlan,omitempty" yaml:"nodePlan,omitempty"`
 	NodeTaints         []Taint                   `json:"nodeTaints,omitempty" yaml:"nodeTaints,omitempty"`
 	Requested          map[string]string         `json:"requested,omitempty" yaml:"requested,omitempty"`
+	RuntimeHandlers    []NodeRuntimeHandler      `json:"runtimeHandlers,omitempty" yaml:"runtimeHandlers,omitempty"`
 	VolumesAttached    map[string]AttachedVolume `json:"volumesAttached,omitempty" yaml:"volumesAttached,omitempty"`
 	VolumesInUse       []string                  `json:"volumesInUse,omitempty" yaml:"volumesInUse,omitempty"`
 }

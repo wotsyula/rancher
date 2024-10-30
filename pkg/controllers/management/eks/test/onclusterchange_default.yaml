@@ -39,7 +39,8 @@ spec:
     kubernetesVersion: "1.22"
     loggingTypes: []
     nodeGroups:
-      - desiredSize: 2
+      - arm: false
+        desiredSize: 2
         diskSize: 20
         ec2SshKey: ""
         gpu: false
@@ -61,6 +62,7 @@ spec:
     privateAccess: false
     publicAccess: true
     publicAccessSources: []
+    ebsCSIDriver: false
     region: us-east-2
     secretsEncryption: false
     securityGroups: []

@@ -3,17 +3,18 @@ package util
 import (
 	"context"
 	"fmt"
-	"time"
 
-	errs "github.com/pkg/errors"
+	managementv3 "github.com/rancher/rancher/pkg/generated/norman/management.cattle.io/v3"
 	"github.com/rancher/rancher/pkg/serviceaccounttoken"
-	v3 "github.com/rancher/rke/types"
+	"github.com/rancher/rancher/pkg/utils"
+	rketypes "github.com/rancher/rke/types"
 	"gopkg.in/yaml.v2"
 	v1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 const (
@@ -26,8 +27,12 @@ const (
 	newClusterRoleBindingName = "system-netes-default-clusterRoleBinding"
 )
 
+func UserAgentForCluster(cluster *managementv3.Cluster) string {
+	return fmt.Sprintf("%s cluster %s", rest.DefaultKubernetesUserAgent(), cluster.Name)
+}
+
 // GenerateServiceAccountToken generate a serviceAccountToken for clusterAdmin given a rest clientset
-func GenerateServiceAccountToken(clientset kubernetes.Interface) (string, error) {
+func GenerateServiceAccountToken(clientset kubernetes.Interface, clusterName string) (string, error) {
 	_, err := clientset.CoreV1().Namespaces().Create(context.TODO(), &v1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: cattleNamespace,
@@ -94,23 +99,14 @@ func GenerateServiceAccountToken(clientset kubernetes.Interface) (string, error)
 		return "", fmt.Errorf("error creating role bindings: %v", err)
 	}
 
-	start := time.Millisecond * 250
-	for i := 0; i < 5; i++ {
-		time.Sleep(start)
-		if serviceAccount, err = clientset.CoreV1().ServiceAccounts(cattleNamespace).Get(context.TODO(), serviceAccount.Name, metav1.GetOptions{}); err != nil {
-			return "", fmt.Errorf("error getting service account: %v", err)
-		}
-		secret, err := serviceaccounttoken.CreateSecretForServiceAccount(context.TODO(), clientset, serviceAccount)
-		if err != nil {
-			return "", fmt.Errorf("error creating secret for service account: %v", err)
-		}
-		if token, ok := secret.Data["token"]; ok {
-			return string(token), nil
-		}
-		start = start * 2
+	if serviceAccount, err = clientset.CoreV1().ServiceAccounts(cattleNamespace).Get(context.Background(), serviceAccount.Name, metav1.GetOptions{}); err != nil {
+		return "", fmt.Errorf("error getting service account: %w", err)
 	}
-
-	return "", errs.New("failed to fetch serviceAccountToken")
+	secret, err := serviceaccounttoken.EnsureSecretForServiceAccount(context.Background(), nil, clientset, serviceAccount, utils.FormatPrefix(clusterName))
+	if err != nil {
+		return "", fmt.Errorf("error ensuring secret for service account: %w", err)
+	}
+	return string(secret.Data["token"]), nil
 }
 
 func DeleteLegacyServiceAccountAndRoleBinding(clientset kubernetes.Interface) error {
@@ -133,8 +129,8 @@ func DeleteLegacyServiceAccountAndRoleBinding(clientset kubernetes.Interface) er
 	return nil
 }
 
-func ConvertToRkeConfig(config string) (v3.RancherKubernetesEngineConfig, error) {
-	var rkeConfig v3.RancherKubernetesEngineConfig
+func ConvertToRkeConfig(config string) (rketypes.RancherKubernetesEngineConfig, error) {
+	var rkeConfig rketypes.RancherKubernetesEngineConfig
 	if err := yaml.Unmarshal([]byte(config), &rkeConfig); err != nil {
 		return rkeConfig, err
 	}

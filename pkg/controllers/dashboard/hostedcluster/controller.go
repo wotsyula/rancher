@@ -15,14 +15,15 @@ import (
 	"github.com/rancher/rancher/pkg/ref"
 	"github.com/rancher/rancher/pkg/settings"
 	"github.com/rancher/rancher/pkg/wrangler"
-	v1 "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
-	"github.com/rancher/wrangler/pkg/kv"
+	v1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
+	"github.com/rancher/wrangler/v3/pkg/kv"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	apierror "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+const priorityClassKey = "priorityClassName"
 
 var (
 	AksCrdChart = chart.Definition{
@@ -85,19 +86,39 @@ func (h handler) onClusterChange(key string, cluster *v3.Cluster) (*v3.Cluster, 
 		return cluster, nil
 	}
 
+	skipChartInstallation := strings.EqualFold(settings.SkipHostedClusterChartInstallation.Get(), "true")
+	if skipChartInstallation {
+		logrus.Warn("Skipping installation of hosted cluster charts, 'skip-hosted-cluster-chart-installation' is set to true")
+		return cluster, nil
+	}
+
 	var toInstallCrdChart, toInstallChart *chart.Definition
-	var provider string
+	var provider, toInstallCrdChartVersion, toInstallChartVersion string
+	toInstallCrdChartVersion = ""
+	toInstallChartVersion = ""
 	if cluster.Spec.AKSConfig != nil {
 		toInstallCrdChart = &AksCrdChart
 		toInstallChart = &AksChart
+		if aksOperatorVersion := settings.AksOperatorVersion.Get(); aksOperatorVersion != "" {
+			toInstallCrdChartVersion = aksOperatorVersion
+			toInstallChartVersion = aksOperatorVersion
+		}
 		provider = "aks"
 	} else if cluster.Spec.EKSConfig != nil {
 		toInstallCrdChart = &EksCrdChart
 		toInstallChart = &EksChart
+		if eksOperatorVersion := settings.EksOperatorVersion.Get(); eksOperatorVersion != "" {
+			toInstallCrdChartVersion = eksOperatorVersion
+			toInstallChartVersion = eksOperatorVersion
+		}
 		provider = "eks"
 	} else if cluster.Spec.GKEConfig != nil {
 		toInstallCrdChart = &GkeCrdChart
 		toInstallChart = &GkeChart
+		if gkeOperatorVersion := settings.GkeOperatorVersion.Get(); gkeOperatorVersion != "" {
+			toInstallCrdChartVersion = gkeOperatorVersion
+			toInstallChartVersion = gkeOperatorVersion
+		}
 		provider = "gke"
 	}
 
@@ -109,7 +130,14 @@ func (h handler) onClusterChange(key string, cluster *v3.Cluster) (*v3.Cluster, 
 		return cluster, err
 	}
 
-	if err := h.manager.Ensure(toInstallCrdChart.ReleaseNamespace, toInstallCrdChart.ChartName, "", nil, true); err != nil {
+	if err := h.manager.Ensure(
+		toInstallCrdChart.ReleaseNamespace,
+		toInstallCrdChart.ChartName,
+		toInstallCrdChartVersion,
+		"",
+		nil,
+		true,
+		""); err != nil {
 		return cluster, err
 	}
 
@@ -132,15 +160,22 @@ func (h handler) onClusterChange(key string, cluster *v3.Cluster) (*v3.Cluster, 
 		"additionalTrustedCAs": additionalCA != nil,
 	}
 	// add priority class value
-	if priorityClassName, err := h.chartsConfig.GetPriorityClassName(); err != nil {
-		if !apierror.IsNotFound(err) {
-			logrus.Warnf("Failed to get rancher priorityClassName for %q: %v", toInstallChart.ChartName, err)
+	if priorityClassName, err := h.chartsConfig.GetGlobalValue(chart.PriorityClassKey); err != nil {
+		if !chart.IsNotFoundError(err) {
+			logrus.Warnf("Failed to get rancher priorityClassName for 'rancher-webhook': %s", err.Error())
 		}
 	} else {
-		chartValues[chart.PriorityClassKey] = priorityClassName
+		chartValues[priorityClassKey] = priorityClassName
 	}
 
-	if err := h.manager.Ensure(toInstallChart.ReleaseNamespace, toInstallChart.ChartName, "", chartValues, true); err != nil {
+	if err := h.manager.Ensure(
+		toInstallChart.ReleaseNamespace,
+		toInstallChart.ChartName,
+		toInstallChartVersion,
+		"",
+		chartValues,
+		true,
+		""); err != nil {
 		return cluster, err
 	}
 
@@ -158,7 +193,7 @@ func (h handler) onSecretChange(key string, obj *corev1.Secret) (*corev1.Secret,
 			if len(parts) == 6 {
 				releaseName := parts[4]
 				if isOperatorChartRelease(releaseName) {
-					h.manager.Remove(ns, releaseName, "")
+					h.manager.Remove(ns, releaseName)
 				}
 			}
 		}

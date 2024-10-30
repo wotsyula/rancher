@@ -8,14 +8,17 @@ import (
 	"strings"
 
 	"github.com/rancher/lasso/pkg/controller"
+	"k8s.io/client-go/rest"
 )
 
 type controllerContextType string
 
 const (
-	User       controllerContextType = "user"
-	Scaled     controllerContextType = "scaled"
-	Management controllerContextType = "mgmt"
+	User            controllerContextType = "user"
+	Scaled          controllerContextType = "scaled"
+	Management      controllerContextType = "mgmt"
+	K8sManagedByKey                       = "app.kubernetes.io/managed-by"
+	ManagerValue                          = "rancher"
 )
 
 // GetOptsFromEnv configures a SharedControllersFactoryOptions using env var and return a pointer to it.
@@ -40,4 +43,12 @@ func syncOnlyChangedObjects(option controllerContextType) bool {
 		}
 	}
 	return false
+}
+
+// WebhookImpersonation returns a ImpersonationConfig that can be used for impersonating the webhook's sudo account and bypass validation.
+func WebhookImpersonation() rest.ImpersonationConfig {
+	return rest.ImpersonationConfig{
+		UserName: "system:serviceaccount:cattle-system:rancher-webhook-sudo",
+		Groups:   []string{"system:masters"},
+	}
 }

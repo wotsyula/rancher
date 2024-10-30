@@ -7,6 +7,7 @@ import (
 const (
 	StatefulSetSpecType                                      = "statefulSetSpec"
 	StatefulSetSpecFieldActiveDeadlineSeconds                = "activeDeadlineSeconds"
+	StatefulSetSpecFieldAppArmorProfile                      = "appArmorProfile"
 	StatefulSetSpecFieldAutomountServiceAccountToken         = "automountServiceAccountToken"
 	StatefulSetSpecFieldContainers                           = "containers"
 	StatefulSetSpecFieldDNSConfig                            = "dnsConfig"
@@ -28,16 +29,19 @@ const (
 	StatefulSetSpecFieldNodeID                               = "nodeId"
 	StatefulSetSpecFieldOS                                   = "os"
 	StatefulSetSpecFieldObjectMeta                           = "metadata"
+	StatefulSetSpecFieldOrdinals                             = "ordinals"
 	StatefulSetSpecFieldOverhead                             = "overhead"
 	StatefulSetSpecFieldPersistentVolumeClaimRetentionPolicy = "persistentVolumeClaimRetentionPolicy"
 	StatefulSetSpecFieldPreemptionPolicy                     = "preemptionPolicy"
 	StatefulSetSpecFieldReadinessGates                       = "readinessGates"
+	StatefulSetSpecFieldResourceClaims                       = "resourceClaims"
 	StatefulSetSpecFieldRestartPolicy                        = "restartPolicy"
 	StatefulSetSpecFieldRunAsGroup                           = "runAsGroup"
 	StatefulSetSpecFieldRunAsNonRoot                         = "runAsNonRoot"
 	StatefulSetSpecFieldRuntimeClassName                     = "runtimeClassName"
 	StatefulSetSpecFieldScale                                = "scale"
 	StatefulSetSpecFieldScheduling                           = "scheduling"
+	StatefulSetSpecFieldSchedulingGates                      = "schedulingGates"
 	StatefulSetSpecFieldSeccompProfile                       = "seccompProfile"
 	StatefulSetSpecFieldSelector                             = "selector"
 	StatefulSetSpecFieldServiceAccountName                   = "serviceAccountName"
@@ -45,6 +49,7 @@ const (
 	StatefulSetSpecFieldShareProcessNamespace                = "shareProcessNamespace"
 	StatefulSetSpecFieldStatefulSetConfig                    = "statefulSetConfig"
 	StatefulSetSpecFieldSubdomain                            = "subdomain"
+	StatefulSetSpecFieldSupplementalGroupsPolicy             = "supplementalGroupsPolicy"
 	StatefulSetSpecFieldSysctls                              = "sysctls"
 	StatefulSetSpecFieldTerminationGracePeriodSeconds        = "terminationGracePeriodSeconds"
 	StatefulSetSpecFieldTopologySpreadConstraints            = "topologySpreadConstraints"
@@ -55,6 +60,7 @@ const (
 
 type StatefulSetSpec struct {
 	ActiveDeadlineSeconds                *int64                                           `json:"activeDeadlineSeconds,omitempty" yaml:"activeDeadlineSeconds,omitempty"`
+	AppArmorProfile                      *AppArmorProfile                                 `json:"appArmorProfile,omitempty" yaml:"appArmorProfile,omitempty"`
 	AutomountServiceAccountToken         *bool                                            `json:"automountServiceAccountToken,omitempty" yaml:"automountServiceAccountToken,omitempty"`
 	Containers                           []Container                                      `json:"containers,omitempty" yaml:"containers,omitempty"`
 	DNSConfig                            *PodDNSConfig                                    `json:"dnsConfig,omitempty" yaml:"dnsConfig,omitempty"`
@@ -76,16 +82,19 @@ type StatefulSetSpec struct {
 	NodeID                               string                                           `json:"nodeId,omitempty" yaml:"nodeId,omitempty"`
 	OS                                   *PodOS                                           `json:"os,omitempty" yaml:"os,omitempty"`
 	ObjectMeta                           *ObjectMeta                                      `json:"metadata,omitempty" yaml:"metadata,omitempty"`
+	Ordinals                             *StatefulSetOrdinals                             `json:"ordinals,omitempty" yaml:"ordinals,omitempty"`
 	Overhead                             map[string]string                                `json:"overhead,omitempty" yaml:"overhead,omitempty"`
 	PersistentVolumeClaimRetentionPolicy *StatefulSetPersistentVolumeClaimRetentionPolicy `json:"persistentVolumeClaimRetentionPolicy,omitempty" yaml:"persistentVolumeClaimRetentionPolicy,omitempty"`
 	PreemptionPolicy                     string                                           `json:"preemptionPolicy,omitempty" yaml:"preemptionPolicy,omitempty"`
 	ReadinessGates                       []PodReadinessGate                               `json:"readinessGates,omitempty" yaml:"readinessGates,omitempty"`
+	ResourceClaims                       []PodResourceClaim                               `json:"resourceClaims,omitempty" yaml:"resourceClaims,omitempty"`
 	RestartPolicy                        string                                           `json:"restartPolicy,omitempty" yaml:"restartPolicy,omitempty"`
 	RunAsGroup                           *int64                                           `json:"runAsGroup,omitempty" yaml:"runAsGroup,omitempty"`
 	RunAsNonRoot                         *bool                                            `json:"runAsNonRoot,omitempty" yaml:"runAsNonRoot,omitempty"`
 	RuntimeClassName                     string                                           `json:"runtimeClassName,omitempty" yaml:"runtimeClassName,omitempty"`
 	Scale                                *int64                                           `json:"scale,omitempty" yaml:"scale,omitempty"`
 	Scheduling                           *Scheduling                                      `json:"scheduling,omitempty" yaml:"scheduling,omitempty"`
+	SchedulingGates                      []PodSchedulingGate                              `json:"schedulingGates,omitempty" yaml:"schedulingGates,omitempty"`
 	SeccompProfile                       *SeccompProfile                                  `json:"seccompProfile,omitempty" yaml:"seccompProfile,omitempty"`
 	Selector                             *LabelSelector                                   `json:"selector,omitempty" yaml:"selector,omitempty"`
 	ServiceAccountName                   string                                           `json:"serviceAccountName,omitempty" yaml:"serviceAccountName,omitempty"`
@@ -93,6 +102,7 @@ type StatefulSetSpec struct {
 	ShareProcessNamespace                *bool                                            `json:"shareProcessNamespace,omitempty" yaml:"shareProcessNamespace,omitempty"`
 	StatefulSetConfig                    *StatefulSetConfig                               `json:"statefulSetConfig,omitempty" yaml:"statefulSetConfig,omitempty"`
 	Subdomain                            string                                           `json:"subdomain,omitempty" yaml:"subdomain,omitempty"`
+	SupplementalGroupsPolicy             string                                           `json:"supplementalGroupsPolicy,omitempty" yaml:"supplementalGroupsPolicy,omitempty"`
 	Sysctls                              []Sysctl                                         `json:"sysctls,omitempty" yaml:"sysctls,omitempty"`
 	TerminationGracePeriodSeconds        *int64                                           `json:"terminationGracePeriodSeconds,omitempty" yaml:"terminationGracePeriodSeconds,omitempty"`
 	TopologySpreadConstraints            []TopologySpreadConstraint                       `json:"topologySpreadConstraints,omitempty" yaml:"topologySpreadConstraints,omitempty"`

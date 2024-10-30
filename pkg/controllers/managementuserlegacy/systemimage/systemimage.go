@@ -7,7 +7,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/rancher/rancher/pkg/catalog/manager"
 	cutils "github.com/rancher/rancher/pkg/catalog/utils"
-	alerting "github.com/rancher/rancher/pkg/controllers/managementuserlegacy/alert/deployer"
 	v3 "github.com/rancher/rancher/pkg/generated/norman/management.cattle.io/v3"
 	"github.com/rancher/rancher/pkg/project"
 	"k8s.io/apimachinery/pkg/labels"
@@ -60,7 +59,7 @@ func (s *Syncer) Sync() error {
 	}
 
 	versionMap := make(map[string]string)
-	curSysImageVersion := systemProject.Annotations[project.SystemImageVersionAnn]
+	curSysImageVersion := systemProject.Annotations[project.SystemImageVersionAnnotation]
 	if curSysImageVersion != "" {
 		if err = json.Unmarshal([]byte(curSysImageVersion), &versionMap); err != nil {
 			return fmt.Errorf("unmashal current system service version failed, %v", err)
@@ -94,7 +93,7 @@ func (s *Syncer) Sync() error {
 		return fmt.Errorf("marshal new system service version %v failed, %v", versionMap, err)
 	}
 
-	systemProject.Annotations[project.SystemImageVersionAnn] = string(newVersion)
+	systemProject.Annotations[project.SystemImageVersionAnnotation] = string(newVersion)
 	_, err = s.projects.Update(systemProject)
 	return err
 }
@@ -119,7 +118,5 @@ func GetSystemImageVersion() (string, error) {
 }
 
 func getSystemService() map[string]SystemService {
-	return map[string]SystemService{
-		alerting.ServiceName: alerting.NewService(),
-	}
+	return map[string]SystemService{}
 }

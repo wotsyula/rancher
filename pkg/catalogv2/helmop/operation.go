@@ -1,3 +1,6 @@
+/*
+Package helmop implements handlers for managing helm operations.
+*/
 package helmop
 
 import (
@@ -7,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/rancher/rancher/pkg/taints"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -28,12 +32,12 @@ import (
 	"github.com/rancher/rancher/pkg/settings"
 	"github.com/rancher/steve/pkg/podimpersonation"
 	"github.com/rancher/steve/pkg/stores/proxy"
-	data2 "github.com/rancher/wrangler/pkg/data"
-	"github.com/rancher/wrangler/pkg/data/convert"
-	corev1controllers "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
-	rbacv1controllers "github.com/rancher/wrangler/pkg/generated/controllers/rbac/v1"
-	"github.com/rancher/wrangler/pkg/name"
-	"github.com/rancher/wrangler/pkg/schemas/validation"
+	data2 "github.com/rancher/wrangler/v3/pkg/data"
+	"github.com/rancher/wrangler/v3/pkg/data/convert"
+	corev1controllers "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
+	rbacv1controllers "github.com/rancher/wrangler/v3/pkg/generated/controllers/rbac/v1"
+	"github.com/rancher/wrangler/v3/pkg/name"
+	"github.com/rancher/wrangler/v3/pkg/schemas/validation"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -48,6 +52,7 @@ import (
 )
 
 const (
+	// helmDataPath contains the files such as values.yaml for a given chart and tar of the chart.
 	helmDataPath = "/home/shell/helm"
 	helmRunPath  = "/home/shell/helm-run"
 )
@@ -139,25 +144,29 @@ func init() {
 	v1internal.AddToScheme(podOptionsScheme)
 }
 
+// Operations describes a helm operation, containing its namespace, roles and such
 type Operations struct {
-	namespace      string
-	contentManager *content.Manager
-	Impersonator   *podimpersonation.PodImpersonation
-	clusterRepos   catalogcontrollers.ClusterRepoClient
-	ops            catalogcontrollers.OperationClient
-	pods           corev1controllers.PodClient
-	apps           catalogcontrollers.AppClient
-	roles          rbacv1controllers.RoleClient
-	roleBindings   rbacv1controllers.RoleBindingClient
-	cg             proxy.ClientGetter
+	namespace      string                               // namespace the operation is going to be in
+	contentManager *content.Manager                     // manager struct to retrieve information about helm repos and its charts
+	Impersonator   *podimpersonation.PodImpersonation   // the impersonator used to manage pods created using the service account of the logged in user
+	clusterRepos   catalogcontrollers.ClusterRepoClient // client for cluster repo custom resource
+	ops            catalogcontrollers.OperationClient   // client for operation custom resource
+	pods           corev1controllers.PodClient          // client for pod kubernetes resource
+	nodes          corev1controllers.NodeClient
+	apps           catalogcontrollers.AppClient        // client for apps custom resource
+	roles          rbacv1controllers.RoleClient        // client for role kubernetes resource
+	roleBindings   rbacv1controllers.RoleBindingClient // client for rolebinding kubernetes resource
+	cg             proxy.ClientGetter                  // dynamic kubernetes client factory
 }
 
+// NewOperations creates a new Operations struct with all fields initialized
 func NewOperations(
 	cg proxy.ClientGetter,
 	catalog catalogcontrollers.Interface,
 	rbac rbacv1controllers.Interface,
 	contentManager *content.Manager,
-	pods corev1controllers.PodClient) *Operations {
+	pods corev1controllers.PodClient,
+	nodes corev1controllers.NodeClient) *Operations {
 	return &Operations{
 		cg:             cg,
 		contentManager: contentManager,
@@ -169,13 +178,23 @@ func NewOperations(
 		apps:           catalog.App(),
 		roleBindings:   rbac.RoleBinding(),
 		roles:          rbac.Role(),
+		nodes:          nodes,
 	}
 }
 
+// Uninstall gets the uninstall commands using the given namespace, name and options and gets the user information using the isApp flag as true.
+// Returns a catalog.Operation that represents the helm operation to be created
 func (s *Operations) Uninstall(ctx context.Context, user user.Info, namespace, name string, options io.Reader, imageOverride string) (*catalog.Operation, error) {
 	status, cmds, err := s.getUninstallArgs(namespace, name, options)
 	if err != nil {
 		return nil, err
+	}
+
+	if status.AutomaticCPTolerations {
+		status.Tolerations, err = s.AddCpTaintsToTolerations(status.Tolerations)
+		if err != nil {
+			return nil, fmt.Errorf("failed to add tolerations for CP nodes: %w", err)
+		}
 	}
 
 	user, err = s.getUser(user, namespace, name, true)
@@ -186,12 +205,21 @@ func (s *Operations) Uninstall(ctx context.Context, user user.Info, namespace, n
 	return s.createOperation(ctx, user, status, cmds, imageOverride)
 }
 
+// Upgrade gets the upgrade commands using the given namespace, name and options and gets the user using the isApp flag as false.
+// Returns a catalog.Operation that represents the helm operation to be created
 func (s *Operations) Upgrade(ctx context.Context, user user.Info, namespace, name string, options io.Reader, imageOverride string) (*catalog.Operation, error) {
 	status, cmds, err := s.getUpgradeCommand(namespace, name, options)
 	if err != nil {
 		return nil, err
 	}
 
+	if status.AutomaticCPTolerations {
+		status.Tolerations, err = s.AddCpTaintsToTolerations(status.Tolerations)
+		if err != nil {
+			return nil, fmt.Errorf("failed to add tolerations for CP nodes: %w", err)
+		}
+	}
+
 	user, err = s.getUser(user, namespace, name, false)
 	if err != nil {
 		return nil, err
@@ -200,12 +228,21 @@ func (s *Operations) Upgrade(ctx context.Context, user user.Info, namespace, nam
 	return s.createOperation(ctx, user, status, cmds, imageOverride)
 }
 
+// Install gets the install commands using the given namespace, name and options and gets the user using the isApp flag as false.
+// Returns a catalog.Operation that represents the helm operation to be created
 func (s *Operations) Install(ctx context.Context, user user.Info, namespace, name string, options io.Reader, imageOverride string) (*catalog.Operation, error) {
 	status, cmds, err := s.getInstallCommand(namespace, name, options)
 	if err != nil {
 		return nil, err
 	}
 
+	if status.AutomaticCPTolerations {
+		status.Tolerations, err = s.AddCpTaintsToTolerations(status.Tolerations)
+		if err != nil {
+			return nil, fmt.Errorf("failed to add tolerations for CP nodes: %w", err)
+		}
+	}
+
 	user, err = s.getUser(user, namespace, name, false)
 	if err != nil {
 		return nil, err
@@ -214,10 +251,12 @@ func (s *Operations) Install(ctx context.Context, user user.Info, namespace, nam
 	return s.createOperation(ctx, user, status, cmds, imageOverride)
 }
 
+// decodeParams decodes the request using its url and v1 group version into the target object
 func decodeParams(req *http.Request, target runtime.Object) error {
 	return podOptionsCodec.DecodeParameters(req.URL.Query(), corev1.SchemeGroupVersion, target)
 }
 
+// proxyLogRequest proxies the given http.Request to get the logs of the given k8s pod and write it to the given http.ResponseWriter
 func (s *Operations) proxyLogRequest(rw http.ResponseWriter, req *http.Request, pod *v1.Pod, client kubernetes.Interface) error {
 	logOptions := &v1.PodLogOptions{}
 	if err := decodeParams(req, logOptions); err != nil {
@@ -234,6 +273,8 @@ func (s *Operations) proxyLogRequest(rw http.ResponseWriter, req *http.Request, 
 		VersionedParams(logOptions, scheme.ParameterCodec).URL()
 
 	httpClient := client.CoreV1().RESTClient().(*rest.RESTClient).Client
+
+	//Creates a reverse proxy and modifies the request url and headers
 	p := httputil.ReverseProxy{
 		Director: func(req *http.Request) {
 			req.URL = logURL
@@ -256,6 +297,8 @@ func (s *Operations) proxyLogRequest(rw http.ResponseWriter, req *http.Request, 
 	return nil
 }
 
+// Log receives a response writer, a http request, the namespace and name of an operation.
+// Gets the pod of the operation and proxies the request to get logs of said pod
 func (s *Operations) Log(rw http.ResponseWriter, req *http.Request, namespace, name string) error {
 	op, err := s.ops.Get(namespace, name, metav1.GetOptions{})
 	if err != nil {
@@ -267,6 +310,7 @@ func (s *Operations) Log(rw http.ResponseWriter, req *http.Request, namespace, n
 		return err
 	}
 
+	// check if the pod and op have objects depended by them and that they aren't the same
 	if len(pod.OwnerReferences) == 0 || len(op.OwnerReferences) == 0 || pod.OwnerReferences[0].UID != op.OwnerReferences[0].UID {
 		return validation.NotFound
 	}
@@ -283,6 +327,12 @@ func (s *Operations) Log(rw http.ResponseWriter, req *http.Request, namespace, n
 	return s.proxyLogRequest(rw, req, pod, client)
 }
 
+// getSpec receives the namespace and name of either an app or a repo according to the value of the isApp flag.
+// If the isApp flag is true, gets the app and then check the annotations of the chart of the release to see if it's a cluster repo and to get it's name.
+// Returns the found catalog.RepoSpec and doesn't return errors if the repo isn't found.
+//
+// If the isApp flag is false, gets the cluster repo directly using its name. Panics if the namespace isn't empty.
+// Returns a catalog.RepoSec struct or an error if it's not found.
 func (s *Operations) getSpec(namespace, name string, isApp bool) (*catalog.RepoSpec, error) {
 	if isApp {
 		rel, err := s.apps.Get(namespace, name, metav1.GetOptions{})
@@ -313,9 +363,13 @@ func (s *Operations) getSpec(namespace, name string, isApp bool) (*catalog.RepoS
 		return &clusterRepo.Spec, nil
 	}
 
-	panic("namespace should not be empty")
+	panic("namespace should be empty")
 }
 
+// getUser receives the user info, the namespace of the repo and the name of either an app or a repo according to the value of the isApp flag.
+// Gets the repoSpec and uses it to build a user.DefaultInfo struct with a default name and groups that will be used to create an operation in either the
+// namespace of the repo or the one given.
+// Returns a user.Info struct to create an operation.
 func (s *Operations) getUser(userInfo user.Info, namespace, name string, isApp bool) (user.Info, error) {
 	repoSpec, err := s.getSpec(namespace, name, isApp)
 	if err != nil {
@@ -341,6 +395,9 @@ func (s *Operations) getUser(userInfo user.Info, namespace, name string, isApp b
 	}, nil
 }
 
+// getUninstallArgs receives the app namespace, app name and body of the request.
+// Returns an uninstall Command according to the input received and also returns the status of the operation that will be created
+// to run the command
 func (s *Operations) getUninstallArgs(appNamespace, appName string, body io.Reader) (catalog.OperationStatus, Commands, error) {
 	rel, err := s.apps.Get(appNamespace, appName, metav1.GetOptions{})
 	if err != nil {
@@ -362,14 +419,18 @@ func (s *Operations) getUninstallArgs(appNamespace, appName string, body io.Read
 	}
 
 	status := catalog.OperationStatus{
-		Action:    cmd.Operation,
-		Release:   rel.Spec.Name,
-		Namespace: appNamespace,
+		Action:                 cmd.Operation,
+		Release:                rel.Spec.Name,
+		Namespace:              appNamespace,
+		Tolerations:            uninstallArgs.OperationTolerations,
+		AutomaticCPTolerations: uninstallArgs.AutomaticCPTolerations,
 	}
 
 	return status, Commands{cmd}, nil
 }
 
+// getUpgradeCommand receives the repository namespace and name and body of the request.
+// Returns the status of the operation that will be created and a list of Command to upgrade the charts received in the request
 func (s *Operations) getUpgradeCommand(repoNamespace, repoName string, body io.Reader) (catalog.OperationStatus, Commands, error) {
 	var (
 		upgradeArgs = &types2.ChartUpgradeAction{}
@@ -386,8 +447,10 @@ func (s *Operations) getUpgradeCommand(repoNamespace, repoName string, body io.R
 	upgradeArgs.Install = true
 
 	status := catalog.OperationStatus{
-		Action:    "upgrade",
-		Namespace: namespace(upgradeArgs.Namespace),
+		Action:                 "upgrade",
+		Namespace:              namespace(upgradeArgs.Namespace),
+		Tolerations:            upgradeArgs.OperationTolerations,
+		AutomaticCPTolerations: upgradeArgs.AutomaticCPTolerations,
 	}
 
 	for _, chartUpgrade := range upgradeArgs.Charts {
@@ -402,6 +465,11 @@ func (s *Operations) getUpgradeCommand(repoNamespace, repoName string, body io.R
 			upgradeArgs,
 		}
 
+		// Add the labels to the command arguments to indicate the chart is from a cluster repo
+		cmd.ArgObjects = append(cmd.ArgObjects, map[string]interface{}{
+			"labels": fmt.Sprintf("%s=%s", catalog.ClusterRepoNameLabel, repoName),
+		})
+
 		status.Release = chartUpgrade.ReleaseName
 		commands = append(commands, cmd)
 	}
@@ -409,20 +477,22 @@ func (s *Operations) getUpgradeCommand(repoNamespace, repoName string, body io.R
 	return status, commands, nil
 }
 
+// Command represents a command that will be run inside a helm operation
 type Command struct {
-	Operation        string
-	ArgObjects       []interface{}
-	ValuesFile       string
-	Values           []byte
-	ChartFile        string
-	Chart            []byte
-	ReleaseName      string
-	ReleaseNamespace string
-	Kustomize        bool
+	Operation        string        // type of operation, eg upgrade, install, uninstall
+	ArgObjects       []interface{} // the arguments that will be used in the command
+	ValuesFile       string        // name of the values.yaml file
+	Values           []byte        // content of the values.yaml file
+	ChartFile        string        // name of the chart tar file
+	Chart            []byte        // content of the chart file
+	ReleaseName      string        // name of the release
+	ReleaseNamespace string        // namespace of the release
+	Kustomize        bool          // flag to inform if it should use kustomize.sh
 }
 
 type Commands []Command
 
+// CommandArgs returns a list containing all the commands and their arguments
 func (c Commands) CommandArgs() ([]string, error) {
 	var (
 		result []string
@@ -441,6 +511,8 @@ func (c Commands) CommandArgs() ([]string, error) {
 	return result, nil
 }
 
+// Render calls the Command.Render method for each command and appends the
+// result in a map and returns it
 func (c Commands) Render() (map[string][]byte, error) {
 	data := map[string][]byte{}
 	for i, cmd := range c {
@@ -456,6 +528,7 @@ func (c Commands) Render() (map[string][]byte, error) {
 	return data, nil
 }
 
+// Render returns a map containing the arguments and their values for the Command
 func (c Command) Render(index int) (map[string][]byte, error) {
 	args, err := c.renderArgs()
 	if err != nil {
@@ -481,6 +554,9 @@ func (c Command) Render(index int) (map[string][]byte, error) {
 	return data, nil
 }
 
+// renderArgs returns a slice of string representing the Command.Operation and it's arguments.
+// It uses the ArgObjects of the command struct to generate arguments for the command
+// and removes the fields that aren't necessary in the command
 func (c Command) renderArgs() ([]string, error) {
 	var (
 		args []string
@@ -503,6 +579,8 @@ func (c Command) renderArgs() ([]string, error) {
 	delete(dataMap, "releaseName")
 	delete(dataMap, "chartName")
 	delete(dataMap, "projectId")
+	delete(dataMap, "operationTolerations")
+	delete(dataMap, "automaticCPTolerations")
 	if v, ok := dataMap["disableOpenAPIValidation"]; ok {
 		delete(dataMap, "disableOpenAPIValidation")
 		dataMap["disableOpenapiValidation"] = v
@@ -547,10 +625,16 @@ func (c Command) renderArgs() ([]string, error) {
 	return append([]string{c.Operation}, args...), nil
 }
 
+func sanitizeCommandKeyNames(name string) string {
+	return strings.Replace(name, "/", "-", -1)
+}
+
 func sanitizeVersion(chartVersion string) string {
 	return badChars.ReplaceAllString(chartVersion, "-")
 }
 
+// injectAnnotation receives the chart data from a tar file and injects the given annotations.
+// Returns the modified chart data
 func injectAnnotation(data []byte, annotations map[string]string) ([]byte, error) {
 	if len(annotations) == 0 {
 		return data, nil
@@ -579,6 +663,7 @@ func injectAnnotation(data []byte, annotations map[string]string) ([]byte, error
 			return nil, err
 		}
 
+		// checks if its chart.yaml
 		parts := strings.Split(header.Name, "/")
 		if len(parts) == 2 && chartYAML[parts[1]] {
 			data, err = addAnnotations(data, annotations)
@@ -609,6 +694,7 @@ func injectAnnotation(data []byte, annotations map[string]string) ([]byte, error
 	return dest.Bytes(), nil
 }
 
+// addAnnotations receives that chart.yaml data and injects the given annotations in it
 func addAnnotations(data []byte, annotations map[string]string) ([]byte, error) {
 	chartData := map[string]interface{}{}
 	if err := yaml.Unmarshal(data, &chartData); err != nil {
@@ -645,6 +731,9 @@ func (s *Operations) enableKustomize(annotations map[string]string, upgrade bool
 	return true
 }
 
+// getChartCommand gets the chart based on the input, inject the annotations into it
+// and then creates and return a Command containing the name of the values file, name of the chart file, the chart data
+// and if the command should use kustomize.sh
 func (s *Operations) getChartCommand(namespace, name, chartName, chartVersion string, upgrade bool, annotations map[string]string, values map[string]interface{}) (Command, error) {
 	chart, err := s.contentManager.Chart(namespace, name, chartName, chartVersion, true)
 	if err != nil {
@@ -661,9 +750,12 @@ func (s *Operations) getChartCommand(namespace, name, chartName, chartVersion st
 		return Command{}, err
 	}
 
+	valuesFileName := sanitizeCommandKeyNames(fmt.Sprintf("values-%s-%s.yaml", chartName, sanitizeVersion(chartVersion)))
+	chartFileName := sanitizeCommandKeyNames(fmt.Sprintf("%s-%s.tgz", chartName, sanitizeVersion(chartVersion)))
+
 	c := Command{
-		ValuesFile: fmt.Sprintf("values-%s-%s.yaml", chartName, sanitizeVersion(chartVersion)),
-		ChartFile:  fmt.Sprintf("%s-%s.tgz", chartName, sanitizeVersion(chartVersion)),
+		ValuesFile: valuesFileName,
+		ChartFile:  chartFileName,
 		Chart:      chartData,
 		Kustomize:  s.enableKustomize(annotations, upgrade),
 	}
@@ -678,20 +770,25 @@ func (s *Operations) getChartCommand(namespace, name, chartName, chartVersion st
 	return c, nil
 }
 
+// getInstallCommand receives the repository namespace, name, and body of the request.
+// It decodes the request to get chart information for creating the `helm install` command
+// along with args. It returns the catalog.OperationStatus struct and a slice of commands
+// to install the charts received in the body of the request.
 func (s *Operations) getInstallCommand(repoNamespace, repoName string, body io.Reader) (catalog.OperationStatus, Commands, error) {
 	installArgs := &types2.ChartInstallAction{}
 	err := json.NewDecoder(body).Decode(installArgs)
 	if err != nil {
 		return catalog.OperationStatus{}, nil, err
 	}
-
 	var (
 		cmds   []Command
 		status = catalog.OperationStatus{
 			Action: "install",
 		}
 	)
-
+	// Sometimes there are two charts to be installed. First one being the CRD chart
+	// and then the actual helm chart. So, we need a for loop and the last index of the array
+	// would be the main chart.
 	for _, chartInstall := range installArgs.Charts {
 		cmd, err := s.getChartCommand(repoNamespace, repoName, chartInstall.ChartName, chartInstall.Version, false, chartInstall.Annotations, chartInstall.Values)
 		if err != nil {
@@ -716,6 +813,10 @@ func (s *Operations) getInstallCommand(repoNamespace, repoName string, body io.R
 				"install": "true",
 			})
 		}
+		// Add the labels to the command arguments to indicate the chart is from a cluster repo
+		cmd.ArgObjects = append(cmd.ArgObjects, map[string]interface{}{
+			"labels": fmt.Sprintf("%s=%s", catalog.ClusterRepoNameLabel, repoName),
+		})
 
 		status.Release = chartInstall.ReleaseName
 
@@ -724,10 +825,13 @@ func (s *Operations) getInstallCommand(repoNamespace, repoName string, body io.R
 
 	status.Namespace = namespace(installArgs.Namespace)
 	status.ProjectID = installArgs.ProjectID
+	status.Tolerations = installArgs.OperationTolerations
+	status.AutomaticCPTolerations = installArgs.AutomaticCPTolerations
 
 	return status, cmds, err
 }
 
+// namespace func sets the namespace as default if it is empty otherwise returns the same namespace it receives.
 func namespace(ns string) string {
 	if ns == "" {
 		return "default"
@@ -735,6 +839,9 @@ func namespace(ns string) string {
 	return ns
 }
 
+// createOperation creates an operation and its pod, along with its roles and roleBinding.
+// Uses the Operations.Impersonator and Operations.ops to do it.
+// Returns the created catalog.Operation struct
 func (s *Operations) createOperation(ctx context.Context, user user.Info, status catalog.OperationStatus, cmds Commands, imageOverride string) (*catalog.Operation, error) {
 	if status.Action != "uninstall" {
 		_, err := s.createNamespace(ctx, status.Namespace, status.ProjectID)
@@ -756,7 +863,7 @@ func (s *Operations) createOperation(ctx context.Context, user user.Info, status
 		kustomize = true
 		break
 	}
-	pod, podOptions := s.createPod(secretData, kustomize, imageOverride)
+	pod, podOptions := s.createPod(secretData, kustomize, imageOverride, status.Tolerations)
 	pod, err = s.Impersonator.CreatePod(ctx, user, pod, podOptions)
 	if err != nil {
 		return nil, err
@@ -791,6 +898,8 @@ func (s *Operations) createOperation(ctx context.Context, user user.Info, status
 	return s.ops.UpdateStatus(op)
 }
 
+// createRoleAndRoleBindings creates a role that applies to the given catalog.Operation and
+// creates a role binding that applies the rule to the given user
 func (s *Operations) createRoleAndRoleBindings(op *catalog.Operation, user string) error {
 	ownerRef := metav1.OwnerReference{
 		APIVersion: op.APIVersion,
@@ -845,6 +954,10 @@ func (s *Operations) createRoleAndRoleBindings(op *catalog.Operation, user strin
 	return nil
 }
 
+// createNamespace creates a new k8s namespace and returns its object.
+// It can also set the field.cattle.io/projectId annotation on the namespace if a non-empty projectID is provided.
+// It creates a watch on the namespace and waits for the v3.ProjectConditionInitialRolesPopulated condition
+// If the condition is not met within 30 seconds, it returns an error
 func (s *Operations) createNamespace(ctx context.Context, namespace, projectID string) (*v1.Namespace, error) {
 	apiContext := types.GetAPIContext(ctx)
 	client, err := s.cg.K8sInterface(apiContext)
@@ -901,11 +1014,45 @@ func (s *Operations) createNamespace(ctx context.Context, namespace, projectID s
 	return nil, fmt.Errorf("failed to wait for roles to be populated")
 }
 
-func (s *Operations) createPod(secretData map[string][]byte, kustomize bool, imageOverride string) (*v1.Pod, *podimpersonation.PodOptions) {
+// createPod creates the struct of the pod for the operation to run in. It also mounts a secret with the secretdata provided.
+// If imageOverride is provided, it will override the default value of settings.FullShellImage.
+// The created pod has default tolerations and node selectors.
+// If the kustomize flag is true, the created pod is modified to be able to run the kustomize.sh script.
+// Returns a pod object and a pod options object representing the helm operation pod and it's options
+func (s *Operations) createPod(secretData map[string][]byte, kustomize bool, imageOverride string, tolerations []corev1.Toleration) (*v1.Pod, *podimpersonation.PodOptions) {
 	image := imageOverride
 	if image == "" {
 		image = settings.FullShellImage()
 	}
+
+	defaultPodTolerations := []v1.Toleration{
+		{
+			Key:      "cattle.io/os",
+			Operator: corev1.TolerationOpEqual,
+			Value:    "linux",
+			Effect:   "NoSchedule",
+		},
+		{
+			Key:      "node-role.kubernetes.io/controlplane",
+			Operator: corev1.TolerationOpEqual,
+			Value:    "true",
+			Effect:   "NoSchedule",
+		},
+		{
+			Key:      "node-role.kubernetes.io/etcd",
+			Operator: corev1.TolerationOpEqual,
+			Value:    "true",
+			Effect:   "NoExecute",
+		},
+		{
+			Key:      "node.cloudprovider.kubernetes.io/uninitialized",
+			Operator: corev1.TolerationOpEqual,
+			Value:    "true",
+			Effect:   "NoSchedule",
+		},
+	}
+	uniqueTolerations := mergeTolerations(defaultPodTolerations, tolerations)
+
 	secret := &v1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "helm-operation-",
@@ -934,32 +1081,7 @@ func (s *Operations) createPod(secretData map[string][]byte, kustomize bool, ima
 			NodeSelector: map[string]string{
 				"kubernetes.io/os": "linux",
 			},
-			Tolerations: []v1.Toleration{
-				{
-					Key:      "cattle.io/os",
-					Operator: corev1.TolerationOpEqual,
-					Value:    "linux",
-					Effect:   "NoSchedule",
-				},
-				{
-					Key:      "node-role.kubernetes.io/controlplane",
-					Operator: corev1.TolerationOpEqual,
-					Value:    "true",
-					Effect:   "NoSchedule",
-				},
-				{
-					Key:      "node-role.kubernetes.io/etcd",
-					Operator: corev1.TolerationOpEqual,
-					Value:    "true",
-					Effect:   "NoExecute",
-				},
-				{
-					Key:      "node.cloudprovider.kubernetes.io/uninitialized",
-					Operator: corev1.TolerationOpEqual,
-					Value:    "true",
-					Effect:   "NoSchedule",
-				},
-			},
+			Tolerations: uniqueTolerations,
 			Containers: []v1.Container{
 				{
 					Name: "helm",
@@ -1019,4 +1141,51 @@ func (s *Operations) createPod(secretData map[string][]byte, kustomize bool, ima
 		},
 		ImageOverride: imageOverride,
 	}
+}
+
+// AddCpTaintsToTolerations gets the list of control plane nodes and adds their taints to the given tolerations.
+func (s *Operations) AddCpTaintsToTolerations(tolerations []corev1.Toleration) ([]corev1.Toleration, error) {
+	cpList, err := s.nodes.List(metav1.ListOptions{LabelSelector: "node-role.kubernetes.io/control-plane=true"})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list control plane nodes: %w", err)
+	}
+	var allTaints []corev1.Taint
+	for _, cp := range cpList.Items {
+		toAdd, _ := taints.GetToDiffTaints(allTaints, cp.Spec.Taints)
+		for _, taint := range toAdd {
+			allTaints = append(allTaints, taint)
+		}
+	}
+	for _, taint := range allTaints {
+		tolerations = append(tolerations, corev1.Toleration{
+			Key:      taint.Key,
+			Operator: corev1.TolerationOpEqual,
+			Effect:   taint.Effect,
+			Value:    taint.Value,
+		})
+	}
+	return tolerations, nil
+}
+
+func mergeTolerations(tolerations1, tolerations2 []v1.Toleration) []v1.Toleration {
+	// Use a map to track unique tolerations.
+	uniqueTolerations := make(map[v1.Toleration]struct{})
+
+	// Add tolerations from the first slice.
+	for _, t := range tolerations1 {
+		uniqueTolerations[t] = struct{}{}
+	}
+
+	// Add tolerations from the second slice, only if they don't already exist.
+	for _, t := range tolerations2 {
+		uniqueTolerations[t] = struct{}{}
+	}
+
+	// Convert the map back to a slice.
+	var mergedTolerations []v1.Toleration
+	for t := range uniqueTolerations {
+		mergedTolerations = append(mergedTolerations, t)
+	}
+
+	return mergedTolerations
 }

@@ -4,8 +4,8 @@ import (
 	"fmt"
 
 	v1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
-	"github.com/rancher/rancher/pkg/controllers/provisioningv2/rke2/dynamicschema"
-	"github.com/rancher/wrangler/pkg/data"
+	"github.com/rancher/rancher/pkg/controllers/capr/dynamicschema"
+	"github.com/rancher/wrangler/v3/pkg/data"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	capi "sigs.k8s.io/cluster-api/api/v1beta1"

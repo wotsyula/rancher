@@ -7,8 +7,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rancher/rancher/pkg/agent/clean/adunmigration"
+
 	"github.com/pkg/errors"
 	"github.com/rancher/norman/types"
+	"github.com/sirupsen/logrus"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/rancher/rancher/pkg/auth/providerrefresh"
 	"github.com/rancher/rancher/pkg/auth/providers/common"
 	"github.com/rancher/rancher/pkg/auth/tokens"
@@ -28,8 +33,6 @@ import (
 	"github.com/rancher/rancher/pkg/tunnelserver/mcmauthorizer"
 	"github.com/rancher/rancher/pkg/types/config"
 	"github.com/rancher/rancher/pkg/wrangler"
-	"github.com/sirupsen/logrus"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type Options struct {
@@ -55,7 +58,7 @@ type mcm struct {
 	startLock   sync.Mutex
 }
 
-func buildScaledContext(ctx context.Context, wranglerContext *wrangler.Context, cfg *Options) (*config.ScaledContext,
+func BuildScaledContext(ctx context.Context, wranglerContext *wrangler.Context, cfg *Options) (*config.ScaledContext,
 	*clustermanager.Manager, *mcmauthorizer.Authorizer, error) {
 	scaledContext, err := config.NewScaledContext(*wranglerContext.RESTConfig, &config.ScaleContextOptions{
 		ControllerFactory: wranglerContext.ControllerFactory,
@@ -102,7 +105,7 @@ func buildScaledContext(ctx context.Context, wranglerContext *wrangler.Context, 
 }
 
 func newMCM(ctx context.Context, wranglerContext *wrangler.Context, cfg *Options) (*mcm, error) {
-	scaledContext, clusterManager, tunnelAuthorizer, err := buildScaledContext(ctx, wranglerContext, cfg)
+	scaledContext, clusterManager, tunnelAuthorizer, err := BuildScaledContext(ctx, wranglerContext, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -213,12 +216,14 @@ func (m *mcm) Start(ctx context.Context) error {
 			return errors.Wrap(err, "failed to telemetry")
 		}
 
+		go adunmigration.UnmigrateAdGUIDUsersOnce(m.ScaledContext)
 		tokens.StartPurgeDaemon(ctx, management)
 		providerrefresh.StartRefreshDaemon(ctx, m.ScaledContext, management)
 		managementdata.CleanupOrphanedSystemUsers(ctx, management)
 		clusterupstreamrefresher.MigrateEksRefreshCronSetting(m.wranglerContext)
 		go managementdata.CleanupDuplicateBindings(m.ScaledContext, m.wranglerContext)
 		go managementdata.CleanupOrphanBindings(m.ScaledContext, m.wranglerContext)
+
 		logrus.Infof("Rancher startup complete")
 		return nil
 	})

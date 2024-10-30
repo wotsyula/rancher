@@ -5,8 +5,11 @@ import (
 	"strings"
 
 	v32 "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
+	"github.com/rancher/rancher/pkg/controllers"
+	"github.com/rancher/rancher/pkg/controllers/management/auth/project_cluster"
 
 	"github.com/rancher/rancher/pkg/clustermanager"
+	wranglerv3 "github.com/rancher/rancher/pkg/generated/controllers/management.cattle.io/v3"
 	v1 "github.com/rancher/rancher/pkg/generated/norman/core/v1"
 	v3 "github.com/rancher/rancher/pkg/generated/norman/management.cattle.io/v3"
 	"github.com/rancher/rancher/pkg/types/config"
@@ -22,7 +25,7 @@ import (
 type userLifecycle struct {
 	prtb            v3.ProjectRoleTemplateBindingInterface
 	crtb            v3.ClusterRoleTemplateBindingInterface
-	grb             v3.GlobalRoleBindingInterface
+	grb             wranglerv3.GlobalRoleBindingController
 	users           v3.UserInterface
 	tokens          v3.TokenInterface
 	namespaces      v1.NamespaceInterface
@@ -53,7 +56,7 @@ func newUserLifecycle(management *config.ManagementContext, clusterManager *clus
 	lfc := &userLifecycle{
 		prtb:            management.Management.ProjectRoleTemplateBindings(""),
 		crtb:            management.Management.ClusterRoleTemplateBindings(""),
-		grb:             management.Management.GlobalRoleBindings(""),
+		grb:             management.Wrangler.Mgmt.GlobalRoleBinding(),
 		users:           management.Management.Users(""),
 		tokens:          management.Management.Tokens(""),
 		namespaces:      management.Core.Namespaces(""),
@@ -116,7 +119,10 @@ func tokenByUserRefFunc(obj interface{}) ([]string, error) {
 	return []string{token.UserID}, nil
 }
 
-func (l *userLifecycle) Create(user *v3.User) (runtime.Object, error) {
+// hasLocalPrincipalID returns true in case the user
+// has at least one PrincipalID that starts with "local://".
+// Returns false otherwise.
+func hasLocalPrincipalID(user *v3.User) bool {
 	var match = false
 	for _, id := range user.PrincipalIDs {
 		if strings.HasPrefix(id, "local://") {
@@ -124,14 +130,19 @@ func (l *userLifecycle) Create(user *v3.User) (runtime.Object, error) {
 			break
 		}
 	}
+	return match
+}
 
-	if !match {
+// Create creates a new user role binding and sets the Status.Conditions.Type = "InitialRolesPopulated",
+// and then returns the object. Otherwise returns an error.
+func (l *userLifecycle) Create(user *v3.User) (runtime.Object, error) {
+	if !hasLocalPrincipalID(user) {
 		user.PrincipalIDs = append(user.PrincipalIDs, "local://"+user.Name)
 	}
 
 	// creatorIDAnn indicates it was created through the API, create the new
 	// user bindings and add the annotation UserConditionInitialRolesPopulated
-	if user.ObjectMeta.Annotations[creatorIDAnn] != "" {
+	if user.ObjectMeta.Annotations[project_cluster.CreatorIDAnnotation] != "" {
 		u, err := v32.UserConditionInitialRolesPopulated.DoUntilTrue(user, func() (runtime.Object, error) {
 			err := l.userManager.CreateNewUserClusterRoleBinding(user.Name, user.UID)
 			if err != nil {
@@ -333,17 +344,17 @@ func (l *userLifecycle) deleteAllPRTB(prtbs []*v3.ProjectRoleTemplateBinding) er
 }
 
 func (l *userLifecycle) deleteAllGRB(grbs []*v3.GlobalRoleBinding) error {
+	// some GRBs can refer to GRs which inherit cluster Roles. Rancher's service account lacks the permission
+	// to delete these GRBs directly, so it needs to bypass the webhook
+	grbClient, err := l.grb.WithImpersonation(controllers.WebhookImpersonation())
+	if err != nil {
+		return fmt.Errorf("error when impersonating webhook to delete globalRoleBindings: %w", err)
+	}
 	for _, grb := range grbs {
-		var err error
-		if grb.Namespace == "" {
-			logrus.Infof("[%v] Deleting globalRoleBinding %v for user %v", userController, grb.Name, grb.UserName)
-			err = l.grb.Delete(grb.Name, &metav1.DeleteOptions{})
-		} else {
-			logrus.Infof("[%v] Deleting globalRoleBinding %v for user %v", userController, grb.Name, grb.UserName)
-			err = l.grb.DeleteNamespaced(grb.Namespace, grb.Name, &metav1.DeleteOptions{})
-		}
+		logrus.Infof("[%v] Deleting globalRoleBinding %v for user %v", userController, grb.Name, grb.UserName)
+		err = grbClient.Delete(grb.Name, &metav1.DeleteOptions{})
 		if err != nil {
-			return fmt.Errorf("error deleting global role template %v: %v", grb.Name, err)
+			return fmt.Errorf("error deleting globalRoleBinding %v: %v", grb.Name, err)
 
 		}
 	}

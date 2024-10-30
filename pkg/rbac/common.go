@@ -12,8 +12,8 @@ import (
 	v32 "github.com/rancher/rancher/pkg/generated/controllers/management.cattle.io/v3"
 	v3 "github.com/rancher/rancher/pkg/generated/norman/management.cattle.io/v3"
 	"github.com/rancher/rancher/pkg/ref"
-	k8srbacv1 "github.com/rancher/wrangler/pkg/generated/controllers/rbac/v1"
-	"github.com/rancher/wrangler/pkg/name"
+	k8srbacv1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/rbac/v1"
+	wranglerName "github.com/rancher/wrangler/v3/pkg/name"
 	"github.com/sirupsen/logrus"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -178,7 +178,7 @@ func TypeFromContext(apiContext *types.APIContext, resource *types.RawResource) 
 }
 
 func GetRTBLabel(objMeta metav1.ObjectMeta) string {
-	return objMeta.Namespace + "_" + objMeta.Name
+	return wranglerName.SafeConcatName(objMeta.Namespace + "_" + objMeta.Name)
 }
 
 // NameForRoleBinding returns a deterministic name for a RoleBinding with the provided namespace, roleName, and subject
@@ -236,12 +236,16 @@ func RulesFromTemplate(clusterRoles k8srbacv1.ClusterRoleCache, roleTemplates v3
 func gatherRules(clusterRoles k8srbacv1.ClusterRoleCache, roleTemplates v32.RoleTemplateCache, rt *v3.RoleTemplate, rules []rbacv1.PolicyRule, seen map[string]bool) ([]rbacv1.PolicyRule, error) {
 	seen[rt.Name] = true
 
-	if rt.External && rt.Context == "cluster" {
-		cr, err := clusterRoles.Get(rt.Name)
-		if err != nil {
-			return nil, err
+	if rt.External {
+		if rt.ExternalRules != nil {
+			rules = append(rules, rt.ExternalRules...)
+		} else if rt.Context == "cluster" {
+			cr, err := clusterRoles.Get(rt.Name)
+			if err != nil {
+				return nil, err
+			}
+			rules = append(rules, cr.Rules...)
 		}
-		rules = append(rules, cr.Rules...)
 	}
 
 	rules = append(rules, rt.Rules...)
@@ -264,7 +268,7 @@ func gatherRules(clusterRoles k8srbacv1.ClusterRoleCache, roleTemplates v32.Role
 }
 
 func ProvisioningClusterAdminName(cluster *provv1.Cluster) string {
-	return name.SafeConcatName("crt", cluster.Name, "cluster-owner")
+	return wranglerName.SafeConcatName("crt", cluster.Name, "cluster-owner")
 }
 
 func RuleGivesResourceAccess(rule rbacv1.PolicyRule, resourceName string) bool {

@@ -5,6 +5,7 @@ import (
 )
 
 // +genclient
+// +kubebuilder:skipversion
 // +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
@@ -12,10 +13,33 @@ type AuthProvider struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Type string `json:"type"`
+	Type               string `json:"type"`
+	LogoutAllSupported bool   `json:"logoutAllSupported"`
+	LogoutAllEnabled   bool   `json:"logoutAllEnabled"`
+	LogoutAllForced    bool   `json:"logoutAllForced"`
+}
+
+func (a *AuthProvider) GetType() string {
+	return a.Type
+}
+
+// OAuthProvider contains the OAuth configuration of the AuthProvider
+type OAuthProvider struct {
+	ClientID      string   `json:"clientId"`
+	Scopes        []string `json:"scopes"`
+	OAuthEndpoint `json:",inline"`
+}
+
+// OAuthEndpoint contains the endpoints needed for an oauth exchange.
+// See also https://pkg.go.dev/golang.org/x/oauth2#Endpoint
+type OAuthEndpoint struct {
+	AuthURL       string `json:"authUrl,omitempty"`
+	DeviceAuthURL string `json:"deviceAuthUrl,omitempty"`
+	TokenURL      string `json:"tokenUrl,omitempty"`
 }
 
 // +genclient
+// +kubebuilder:skipversion
 // +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
@@ -40,6 +64,7 @@ type BasicLogin struct {
 }
 
 // +genclient
+// +kubebuilder:skipversion
 // +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
@@ -50,6 +75,7 @@ type LocalProvider struct {
 }
 
 // +genclient
+// +kubebuilder:skipversion
 // +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
@@ -67,6 +93,7 @@ type GithubLogin struct {
 }
 
 // +genclient
+// +kubebuilder:skipversion
 // +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
@@ -84,6 +111,7 @@ type GoogleOauthLogin struct {
 }
 
 // +genclient
+// +kubebuilder:skipversion
 // +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
@@ -96,6 +124,7 @@ type ActiveDirectoryProvider struct {
 }
 
 // +genclient
+// +kubebuilder:skipversion
 // +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
@@ -105,9 +134,13 @@ type AzureADProvider struct {
 	AuthProvider      `json:",inline"`
 
 	RedirectURL string `json:"redirectUrl"`
+	TenantID    string `json:"tenantId,omitempty"`
+
+	OAuthProvider `json:",inline"`
 }
 
 // +genclient
+// +kubebuilder:skipversion
 // +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
@@ -122,9 +155,11 @@ type SamlProvider struct {
 type AzureADLogin struct {
 	GenericLogin `json:",inline"`
 	Code         string `json:"code" norman:"type=string,required"`
+	IDToken      string `json:"id_token,omitempty"`
 }
 
 // +genclient
+// +kubebuilder:skipversion
 // +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
@@ -135,6 +170,7 @@ type OpenLdapProvider struct {
 }
 
 // +genclient
+// +kubebuilder:skipversion
 // +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
@@ -176,6 +212,7 @@ type SamlLoginOutput struct {
 }
 
 // +genclient
+// +kubebuilder:skipversion
 // +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
@@ -194,4 +231,23 @@ type OIDCLogin struct {
 
 type KeyCloakOIDCProvider struct {
 	OIDCProvider `json:",inline"`
+}
+
+// +genclient
+// +kubebuilder:skipversion
+// +genclient:nonNamespaced
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+type GenericOIDCProvider struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	AuthProvider      `json:",inline"`
+
+	RedirectURL string `json:"redirectUrl"`
+	Scopes      string `json:"scopes"`
+}
+
+type GenericOIDCLogin struct {
+	GenericLogin `json:",inline"`
+	Code         string `json:"code" norman:"type=string,required"`
 }

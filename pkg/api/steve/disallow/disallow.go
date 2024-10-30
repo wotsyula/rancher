@@ -9,9 +9,17 @@ import (
 	steve "github.com/rancher/steve/pkg/server"
 )
 
+// The resource names must be plural.
 var (
-	allowAll = map[string]bool{
+	// AllowAll is a set of resources for which Rancher doesn't require admin level access to manipulate directly through kubectl.
+	AllowAll = map[string]bool{
+		"clusterproxyconfigs":                        true,
+		"clusterroletemplatebindings":                true,
+		"globalrolebindings":                         true,
+		"globalroles":                                true,
 		"podsecurityadmissionconfigurationtemplates": true,
+		"projects":                                   true,
+		"projectroletemplatebindings":                true,
 	}
 	allowPost = map[string]bool{
 		"settings": true,
@@ -37,7 +45,7 @@ func Register(server *steve.Server) {
 		Customize: func(schema *types.APISchema) {
 			gr := attributes.GR(schema)
 			if gr.Group == "management.cattle.io" || gr.Group == "project.cattle.io" {
-				if allowAll[gr.Resource] {
+				if AllowAll[gr.Resource] {
 					return
 				}
 				attributes.AddDisallowMethods(schema,

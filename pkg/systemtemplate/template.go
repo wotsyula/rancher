@@ -111,7 +111,11 @@ rules:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  {{- if .IsPreBootstrap }}
+  name: cattle-cluster-agent-bootstrap
+  {{- else }}
   name: cattle-cluster-agent
+  {{- end }}
   namespace: cattle-system
   annotations:
     management.cattle.io/scale-available: "2"
@@ -124,58 +128,30 @@ spec:
       labels:
         app: cattle-cluster-agent
     spec:
+      {{- if .Affinity }}
       affinity:
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 100
-            podAffinityTerm:
-              labelSelector:
-                matchExpressions:
-                - key: app
-                  operator: In
-                  values:
-                  - cattle-cluster-agent
-              topologyKey: kubernetes.io/hostname
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
-                - key: beta.kubernetes.io/os
-                  operator: NotIn
-                  values:
-                    - windows
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - preference:
-              matchExpressions:
-              - key: node-role.kubernetes.io/controlplane
-                operator: In
-                values:
-                - "true"
-            weight: 100
-          - preference:
-              matchExpressions:
-              - key: node-role.kubernetes.io/control-plane
-                operator: In
-                values:
-                - "true"
-            weight: 100
-          - preference:
-              matchExpressions:
-              - key: node-role.kubernetes.io/master
-                operator: In
-                values:
-                - "true"
-            weight: 100
-          - preference:
-              matchExpressions:
-              - key: cattle.io/cluster-agent
-                operator: In
-                values:
-                - "true"
-            weight: 1
+{{ .Affinity | indent 8 }}
+      {{- end }}
       serviceAccountName: cattle
       tolerations:
-      {{- if .Tolerations }}
+      {{- if .IsPreBootstrap }}
+      # tolerations wrt running on the pre-bootstrapped node
+      - effect: NoSchedule
+        key: node-role.kubernetes.io/controlplane
+        value: "true"
+      - effect: NoSchedule
+        key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+      - effect: NoSchedule
+        key: "node-role.kubernetes.io/master"
+        operator: "Exists"
+      - effect: NoExecute
+        key: "node-role.kubernetes.io/etcd"
+        operator: "Exists"
+      - effect: NoSchedule
+        key: node.cloudprovider.kubernetes.io/uninitialized
+        operator: "Exists"
+      {{- else if .Tolerations }}
       # Tolerations added based on found taints on controlplane nodes
 {{ .Tolerations | indent 6 }}
       {{- else }}
@@ -190,9 +166,16 @@ spec:
         key: "node-role.kubernetes.io/master"
         operator: "Exists"
       {{- end }}
+      {{- if .AppendTolerations }}
+{{ .AppendTolerations | indent 6 }}
+      {{- end }}
       containers:
         - name: cluster-register
           imagePullPolicy: IfNotPresent
+          {{- if .ResourceRequirements }}
+          resources:
+{{ .ResourceRequirements | indent 12 }}
+          {{- end }}
           env:
           {{- if ne .Features "" }}
           - name: CATTLE_FEATURES
@@ -210,6 +193,9 @@ spec:
             value: "true"
           - name: CATTLE_CLUSTER_REGISTRY
             value: "{{.ClusterRegistry}}"
+          {{- if .IsPreBootstrap }}
+          # since we're on the host network, talk to the apiserver over localhost
+          {{- end }}
       {{- if .AgentEnvVars}}
 {{ .AgentEnvVars | indent 10 }}
       {{- end }}
@@ -221,6 +207,10 @@ spec:
       {{- if .PrivateRegistryConfig}}
       imagePullSecrets:
       - name: cattle-private-registry
+      {{- end }}
+      {{- if .IsPreBootstrap }}
+      # use hostNetwork since the CNI (and coreDNS) is not up yet
+      hostNetwork: true
       {{- end }}
       volumes:
       - name: cattle-credentials

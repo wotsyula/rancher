@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"strings"
 
-	v32 "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
+	"github.com/rancher/norman/httperror"
 
-	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
 	"github.com/rancher/norman/types"
+	"github.com/sirupsen/logrus"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+
+	v32 "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
 	"github.com/rancher/rancher/pkg/auth/providers/common"
 	"github.com/rancher/rancher/pkg/auth/tokens"
 	v3client "github.com/rancher/rancher/pkg/client/generated/management/v3"
@@ -19,17 +23,25 @@ import (
 	v3 "github.com/rancher/rancher/pkg/generated/norman/management.cattle.io/v3"
 	"github.com/rancher/rancher/pkg/types/config"
 	"github.com/rancher/rancher/pkg/user"
-	"github.com/sirupsen/logrus"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 )
 
 const (
-	Name              = "activedirectory"
-	UserScope         = Name + "_user"
-	GroupScope        = Name + "_group"
-	ObjectClass       = "objectClass"
-	MemberOfAttribute = "memberOf"
+	Name                               = "activedirectory"
+	UserScope                          = Name + "_user"
+	GroupScope                         = Name + "_group"
+	ObjectClass                        = "objectClass"
+	ObjectGUIDAttribute                = "objectGUID"
+	MemberOfAttribute                  = "memberOf"
+	StatusConfigMapName                = "ad-guid-migration"
+	StatusConfigMapNamespace           = "cattle-system"
+	StatusMigrationField               = "ad-guid-migration-status"
+	StatusMigrationFinished            = "Finished"
+	StatusMigrationRunning             = "Running"
+	StatusMigrationFinishedWithSkipped = "FinishedWithSkipped"
+	StatusMigrationFinishedWithMissing = "FinishedWithMissing"
+	StatusMigrationFailed              = "Failed"
+	StatusLoginDisabled                = "login is disabled while migration is running"
+	StatusACMigrationRunning           = "migration-ad-guid-migration-status"
 )
 
 var scopes = []string{UserScope, GroupScope}
@@ -37,6 +49,7 @@ var scopes = []string{UserScope, GroupScope}
 type adProvider struct {
 	ctx         context.Context
 	authConfigs v3.AuthConfigInterface
+	configMaps  corev1.ConfigMapLister
 	secrets     corev1.SecretInterface
 	userMGR     user.Manager
 	certs       string
@@ -48,10 +61,19 @@ func Configure(ctx context.Context, mgmtCtx *config.ScaledContext, userMGR user.
 	return &adProvider{
 		ctx:         ctx,
 		authConfigs: mgmtCtx.Management.AuthConfigs(""),
+		configMaps:  mgmtCtx.Core.ConfigMaps("").Controller().Lister(),
 		secrets:     mgmtCtx.Core.Secrets(""),
 		userMGR:     userMGR,
 		tokenMGR:    tokenMGR,
 	}
+}
+
+func (p *adProvider) LogoutAll(apiContext *types.APIContext, token *v3.Token) error {
+	return nil
+}
+
+func (p *adProvider) Logout(apiContext *types.APIContext, token *v3.Token) error {
+	return nil
 }
 
 func (p *adProvider) GetName() string {
@@ -82,6 +104,11 @@ func (p *adProvider) AuthenticateUser(ctx context.Context, input interface{}) (v
 	config, caPool, err := p.getActiveDirectoryConfig()
 	if err != nil {
 		return v3.Principal{}, nil, "", errors.New("can't find authprovider")
+	}
+
+	// If a migration is running, we need to block logins and indicate why we are doing so
+	if config.Annotations != nil && config.Annotations[StatusACMigrationRunning] == StatusMigrationRunning {
+		return v3.Principal{}, nil, "", httperror.WrapAPIError(err, httperror.ClusterUnavailable, StatusLoginDisabled)
 	}
 
 	principal, groupPrincipal, err := p.loginUser(login, config, caPool, false)
@@ -165,16 +192,10 @@ func (p *adProvider) getActiveDirectoryConfig() (*v32.ActiveDirectoryConfig, *x5
 	storedADConfigMap := u.UnstructuredContent()
 
 	storedADConfig := &v32.ActiveDirectoryConfig{}
-	mapstructure.Decode(storedADConfigMap, storedADConfig)
-
-	metadataMap, ok := storedADConfigMap["metadata"].(map[string]interface{})
-	if !ok {
-		return nil, nil, fmt.Errorf("failed to retrieve ActiveDirectoryConfig metadata, cannot read k8s Unstructured data")
+	err = common.Decode(storedADConfigMap, storedADConfig)
+	if err != nil {
+		return nil, nil, fmt.Errorf("unable to decode Active Directory Config: %w", err)
 	}
-
-	typemeta := &metav1.ObjectMeta{}
-	mapstructure.Decode(metadataMap, typemeta)
-	storedADConfig.ObjectMeta = *typemeta
 
 	if p.certs != storedADConfig.Certificate || p.caPool == nil {
 		pool, err := newCAPool(storedADConfig.Certificate)
@@ -240,6 +261,13 @@ func (p *adProvider) GetUserExtraAttributes(userPrincipal v3.Principal) map[stri
 	return extras
 }
 
+type LoginDisabledError struct{}
+
+// Error provides a string representation of an LdapErrorNotFound
+func (e LoginDisabledError) Error() string {
+	return StatusLoginDisabled
+}
+
 // IsDisabledProvider checks if the Azure Active Directory provider is currently disabled in Rancher.
 func (p *adProvider) IsDisabledProvider() (bool, error) {
 	adConfig, _, err := p.getActiveDirectoryConfig()
@@ -247,9 +275,4 @@ func (p *adProvider) IsDisabledProvider() (bool, error) {
 		return false, err
 	}
 	return !adConfig.Enabled, nil
-}
-
-// CleanupResources deletes resources associated with the Azure Active Directory auth provider.
-func (p *adProvider) CleanupResources(*v3.AuthConfig) error {
-	return nil
 }

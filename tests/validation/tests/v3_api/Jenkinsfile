@@ -16,7 +16,7 @@ node {
   def imageName = "rancher-validation-${job_name}${env.BUILD_NUMBER}"
   def testsDir = "tests/v3_api/"
 
-  def branch = "release/v2.6"
+  def branch = "release/v2.8"
   if ("${env.branch}" != "null" && "${env.branch}" != "") {
     branch = "${env.branch}"
   }
@@ -25,9 +25,10 @@ node {
     withFolderProperties {
       paramsMap = []
       params.each {
-        paramsMap << "$it.key=$it.value"
+        if (it.value && it.value.trim() != "") {
+            paramsMap << "$it.key=$it.value"
+        }
       }
-      withEnv(paramsMap) {
       withCredentials([ string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
                         string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY'),
                         string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'RANCHER_EKS_ACCESS_KEY'),
@@ -83,6 +84,7 @@ node {
                         string(credentialsId: 'RANCHER_LINODE_ACCESSKEY', variable: "RANCHER_LINODE_ACCESSKEY")
                         ]) {
                           
+      withEnv(paramsMap) {
         stage('Checkout') {
           deleteDir()
           checkout([

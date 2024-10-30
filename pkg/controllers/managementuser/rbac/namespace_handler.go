@@ -8,6 +8,8 @@ import (
 	"github.com/pkg/errors"
 	"github.com/rancher/norman/types/convert"
 	"github.com/rancher/norman/types/slice"
+	"github.com/rancher/rancher/pkg/apis/management.cattle.io"
+	apisV3 "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
 	"github.com/rancher/rancher/pkg/controllers/managementuser/resourcequota"
 	fleetconst "github.com/rancher/rancher/pkg/fleet"
 	v3 "github.com/rancher/rancher/pkg/generated/norman/management.cattle.io/v3"
@@ -21,17 +23,20 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 const (
 	projectNSGetClusterRoleNameFmt = "%v-namespaces-%v"
 	projectNSAnn                   = "authz.cluster.auth.io/project-namespaces"
 	initialRoleCondition           = "InitialRolesPopulated"
+	manageNSVerb                   = "manage-namespaces"
+	projectNSEditVerb              = "*"
 )
 
 var projectNSVerbToSuffix = map[string]string{
-	"get": "readonly",
-	"*":   "edit",
+	"get":             "readonly",
+	projectNSEditVerb: "edit",
 }
 var defaultProjectLabels = labels.Set(map[string]string{"authz.management.cattle.io/default-project": "true"})
 var systemProjectLabels = labels.Set(map[string]string{"authz.management.cattle.io/system-project": "true"})
@@ -83,8 +88,8 @@ func (n *nsLifecycle) Updated(obj *v1.Namespace) (runtime.Object, error) {
 }
 
 func (n *nsLifecycle) Remove(obj *v1.Namespace) (runtime.Object, error) {
-	err := n.reconcileNamespaceProjectClusterRole(obj)
-	return obj, err
+	n.asyncCleanupRBAC(obj.Name)
+	return obj, nil
 }
 
 func (n *nsLifecycle) syncNS(obj *v1.Namespace) (bool, error) {
@@ -223,7 +228,7 @@ func (n *nsLifecycle) ensurePRTBAddToNamespace(ns *v1.Namespace) (bool, error) {
 			return false, errors.Wrapf(err, "object %v is not valid project role template binding", prtb)
 		}
 
-		if prtb.UserName == "" && prtb.GroupPrincipalName == "" && prtb.GroupName == "" && prtb.ServiceAccount == "" {
+		if prtb.UserName == "" && prtb.GroupPrincipalName == "" && prtb.GroupName == "" {
 			continue
 		}
 
@@ -317,8 +322,10 @@ func (n *nsLifecycle) ensurePRTBAddToNamespace(ns *v1.Namespace) (bool, error) {
 func (n *nsLifecycle) reconcileNamespaceProjectClusterRole(ns *v1.Namespace) error {
 	for verb, name := range projectNSVerbToSuffix {
 		var desiredRole string
+		var projectName string
 		if ns.DeletionTimestamp == nil {
 			if parts := strings.SplitN(ns.Annotations[projectIDAnnotation], ":", 2); len(parts) == 2 && len(parts[1]) > 0 {
+				projectName = parts[1]
 				desiredRole = fmt.Sprintf(projectNSGetClusterRoleNameFmt, parts[1], name)
 			}
 		}
@@ -328,7 +335,7 @@ func (n *nsLifecycle) reconcileNamespaceProjectClusterRole(ns *v1.Namespace) err
 			return err
 		}
 
-		roleCli := n.m.workload.RBAC.ClusterRoles("")
+		roleCli := n.m.clusterRoles
 		nsInDesiredRole := false
 		for _, c := range clusterRoles {
 			cr, ok := c.(*rbacv1.ClusterRole)
@@ -395,7 +402,7 @@ func (n *nsLifecycle) reconcileNamespaceProjectClusterRole(ns *v1.Namespace) err
 
 			// Create new role
 			if cr == nil {
-				return n.m.createProjectNSRole(desiredRole, verb, ns.Name)
+				return n.m.createProjectNSRole(desiredRole, verb, ns.Name, projectName)
 			}
 
 			// Check to see if retrieved role has the namespace (small chance cache could have been updated)
@@ -435,8 +442,8 @@ func (n *nsLifecycle) reconcileNamespaceProjectClusterRole(ns *v1.Namespace) err
 	return nil
 }
 
-func (m *manager) createProjectNSRole(roleName, verb, ns string) error {
-	roleCli := m.workload.RBAC.ClusterRoles("")
+func (m *manager) createProjectNSRole(roleName, verb, ns, projectName string) error {
+	roleCli := m.clusterRoles
 
 	cr := &rbacv1.ClusterRole{
 		ObjectMeta: metav1.ObjectMeta{
@@ -454,8 +461,29 @@ func (m *manager) createProjectNSRole(roleName, verb, ns string) error {
 			},
 		}
 	}
+	// the verbs passed into this function come from projectNSVerbToSuffix which only contains two verbs, one for read
+	// permissions and one for write. Only the write permission should get the manage-ns verb
+	if verb == projectNSEditVerb {
+		cr = addManageNSPermission(cr, projectName)
+	}
 	_, err := roleCli.Create(cr)
 	return err
+}
+
+func addManageNSPermission(clusterRole *rbacv1.ClusterRole, projectName string) *rbacv1.ClusterRole {
+	if clusterRole.Rules == nil {
+		clusterRole.Rules = []rbacv1.PolicyRule{}
+	}
+	clusterRole.Rules = append(clusterRole.Rules, rbacv1.PolicyRule{
+		APIGroups:     []string{management.GroupName},
+		Verbs:         []string{manageNSVerb},
+		Resources:     []string{apisV3.ProjectResourceName},
+		ResourceNames: []string{projectName},
+	})
+	if clusterRole.Annotations == nil {
+		clusterRole.Annotations = map[string]string{}
+	}
+	return clusterRole
 }
 
 func crByNS(obj interface{}) ([]string, error) {
@@ -539,4 +567,41 @@ func updateStatusAnnotation(hasPRTBs bool, namespace *v1.Namespace, mgr *manager
 		}
 	}
 
+}
+
+// asyncCleanupRBAC will wait for a Terminating namespace to be fully deleted before removing the associated RBAC.
+func (n *nsLifecycle) asyncCleanupRBAC(namespaceName string) {
+	go func() {
+		backoff := wait.Backoff{
+			Duration: 5 * time.Second,
+			Factor:   2.0,
+			Jitter:   0.1,
+			Steps:    10,
+			Cap:      5 * time.Minute,
+		}
+
+		err := wait.ExponentialBackoff(backoff, func() (bool, error) {
+			_, err := n.m.nsLister.Get("", namespaceName)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					// Namespace is fully deleted, clean up RBAC
+					err := n.reconcileNamespaceProjectClusterRole(&v1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespaceName}})
+					if err != nil {
+						logrus.Errorf("error cleaning up RBAC for namespace %s: %v", namespaceName, err)
+						return true, err
+					}
+					logrus.Debugf("successfully cleaned up RBAC for namespace %s", namespaceName)
+					return true, nil
+				}
+				return false, err
+			}
+
+			logrus.Debugf("namespace %s is still present. Will recheck.", namespaceName)
+			return false, nil
+		})
+
+		if err != nil {
+			logrus.Errorf("async cleanup of RBAC for namespace %s failed: %v", namespaceName, err)
+		}
+	}()
 }

@@ -18,10 +18,9 @@ import (
 	tokenUtil "github.com/rancher/rancher/pkg/auth/tokens"
 	v3 "github.com/rancher/rancher/pkg/generated/norman/management.cattle.io/v3"
 	rbacv1 "github.com/rancher/rancher/pkg/generated/norman/rbac.authorization.k8s.io/v1"
-	"github.com/rancher/rancher/pkg/settings"
 	"github.com/rancher/rancher/pkg/types/config"
 	"github.com/rancher/rancher/pkg/user"
-	"github.com/rancher/wrangler/pkg/randomtoken"
+	"github.com/rancher/wrangler/v3/pkg/randomtoken"
 	"github.com/sirupsen/logrus"
 	k8srbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -289,7 +288,7 @@ func (m *userManager) EnsureClusterToken(clusterName string, input user.TokenInp
 
 	logrus.Infof("Creating token for user %v", input.UserName)
 	err = wait.ExponentialBackoff(backoff, func() (bool, error) {
-		// Backoff was added here because it is possible the token is the process of deleting.
+		// Backoff was added here because it is possible the token is in the process of deleting.
 		// This should cause the create to retry until the delete is finished.
 		newToken, err := m.tokens.Create(token)
 		if err != nil {
@@ -301,7 +300,6 @@ func (m *userManager) EnsureClusterToken(clusterName string, input user.TokenInp
 		token = newToken
 		return true, nil
 	})
-
 	if err != nil {
 		return "", err
 	}
@@ -311,34 +309,23 @@ func (m *userManager) EnsureClusterToken(clusterName string, input user.TokenInp
 
 // newTokenForKubeconfig creates a new token for a generated kubeconfig.
 func (m *userManager) newTokenForKubeconfig(clusterName, tokenName, description, kind, userName string, userPrincipal v3.Principal) (string, error) {
-	// settings.KubeconfigTokenTTLMinutes is deprecated use tokens.GetKubeconfigDefaultTokenTTLInMilliSeconds() when the setting is removed
-	tokenTTL, err := tokens.ParseTokenTTL(settings.KubeconfigTokenTTLMinutes.Get())
+	tokenTTL, err := tokens.GetKubeconfigDefaultTokenTTLInMilliSeconds()
 	if err != nil {
-		return "", fmt.Errorf("failed to parse setting '%s': %w", settings.KubeconfigTokenTTLMinutes.Name, err)
+		return "", fmt.Errorf("failed to get default token TTL: %w", err)
 	}
 
-	tokenTTL, err = tokens.ClampToMaxTTL(tokenTTL)
-	if err != nil {
-		return "", fmt.Errorf("failed to validate token ttl %w", err)
-	}
-
-	ttlMilli := tokenTTL.Milliseconds()
-	logrus.Infof("Creating token for user %v", userName)
 	input := user.TokenInput{
 		TokenName:     tokenName,
 		Description:   description,
 		Kind:          kind,
 		UserName:      userName,
 		AuthProvider:  userPrincipal.Provider,
-		TTL:           &ttlMilli,
+		TTL:           tokenTTL,
 		Randomize:     true,
 		UserPrincipal: userPrincipal,
 	}
-	fullToken, err := m.EnsureClusterToken(clusterName, input)
-	if err != nil {
-		return "", err
-	}
-	return fullToken, nil
+
+	return m.EnsureClusterToken(clusterName, input)
 }
 
 // GetKubeconfigToken creates a new token for use in a kubeconfig generated through the CLI.
@@ -419,6 +406,13 @@ func (m *userManager) EnsureUser(principalName, displayName string) (*v3.User, e
 	}
 
 	if user != nil {
+		if displayName != "" && user.DisplayName == "" {
+			user.DisplayName = displayName
+			if _, err := m.users.Update(user); err != nil {
+				return nil, err
+			}
+		}
+
 		// If the user does not have the annotation it indicates the user was created
 		// through the UI or from a previous rancher version so don't add the
 		// default bindings.

@@ -8,15 +8,20 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/coreos/go-semver/semver"
 	"github.com/pkg/errors"
 	cond "github.com/rancher/norman/condition"
 	apimgmtv3 "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
-	kd "github.com/rancher/rancher/pkg/controllers/management/kontainerdrivermetadata"
-	"github.com/rancher/rancher/pkg/controllers/management/secretmigrator"
+	rkev1 "github.com/rancher/rancher/pkg/apis/rke.cattle.io/v1"
+	"github.com/rancher/rancher/pkg/controllers/management/secretmigrator/assemblers"
 	"github.com/rancher/rancher/pkg/controllers/managementagent/podresources"
 	"github.com/rancher/rancher/pkg/controllers/managementlegacy/compose/common"
+	capicontrollers "github.com/rancher/rancher/pkg/generated/controllers/cluster.x-k8s.io/v1beta1"
+	provcontrollers "github.com/rancher/rancher/pkg/generated/controllers/provisioning.cattle.io/v1"
+	rkecontrollers "github.com/rancher/rancher/pkg/generated/controllers/rke.cattle.io/v1"
 	v1 "github.com/rancher/rancher/pkg/generated/norman/core/v1"
 	v3 "github.com/rancher/rancher/pkg/generated/norman/management.cattle.io/v3"
+	kd "github.com/rancher/rancher/pkg/kontainerdrivermetadata"
 	"github.com/rancher/rancher/pkg/librke"
 	nodehelper "github.com/rancher/rancher/pkg/node"
 	"github.com/rancher/rancher/pkg/systemaccount"
@@ -25,6 +30,7 @@ import (
 	rketypes "github.com/rancher/rke/types"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -34,6 +40,13 @@ import (
 const (
 	AllNodeKey     = "_machine_all_"
 	annotationName = "management.cattle.io/nodesyncer"
+
+	// UpgradeEnabledLabel is a label which will be set to true on imported RKE2/K3s cluster nodes when the version in the
+	// cluster spec is higher than the version on the nodes. The system-upgrade-controller plan uses a label selector in
+	// the plan specification to determine which nodes must be upgraded. For newly added nodes, this label will not be
+	// applied until the version changes in the cluster spec, preventing unnecessary cordoning until an upgrade is
+	// required.
+	UpgradeEnabledLabel = "upgrade.cattle.io/kubernetes-upgrade"
 )
 
 type nodeSyncer struct {
@@ -54,6 +67,9 @@ type nodesSyncer struct {
 	sysImagesLister      v3.RkeK8sSystemImageLister
 	sysImages            v3.RkeK8sSystemImageInterface
 	secretLister         v1.SecretLister
+	provClusterCache     provcontrollers.ClusterCache
+	capiClusterCache     capicontrollers.ClusterCache
+	rkeControlPlaneCache rkecontrollers.RKEControlPlaneCache
 }
 
 type nodeDrain struct {
@@ -85,6 +101,9 @@ func Register(ctx context.Context, cluster *config.UserContext, kubeConfigGetter
 		sysImagesLister:      cluster.Management.Management.RkeK8sSystemImages("").Controller().Lister(),
 		sysImages:            cluster.Management.Management.RkeK8sSystemImages(""),
 		secretLister:         cluster.Management.Core.Secrets("").Controller().Lister(),
+		provClusterCache:     cluster.Management.Wrangler.Provisioning.Cluster().Cache(),
+		capiClusterCache:     cluster.Management.Wrangler.CAPI.Cluster().Cache(),
+		rkeControlPlaneCache: cluster.Management.Wrangler.RKE.RKEControlPlane().Cache(),
 	}
 
 	n := &nodeSyncer{
@@ -124,7 +143,72 @@ func (n *nodeSyncer) sync(key string, node *corev1.Node) (runtime.Object, error)
 		n.machines.Controller().Enqueue(n.clusterNamespace, AllNodeKey)
 	}
 
+	cluster, err := n.nodesSyncer.clusterLister.Get("", n.clusterNamespace)
+	if err != nil {
+		return nil, err
+	}
+
+	var (
+		updateVersion string
+	)
+
+	// only applies to imported k3s/rke2 clusters
+	if cluster.Status.Driver == apimgmtv3.ClusterDriverK3s {
+		if cluster.Spec.K3sConfig == nil {
+			return nil, nil
+		}
+		updateVersion = cluster.Spec.K3sConfig.Version
+	} else if cluster.Status.Driver == apimgmtv3.ClusterDriverRke2 {
+		if cluster.Spec.Rke2Config == nil {
+			return nil, nil
+		}
+		updateVersion = cluster.Spec.Rke2Config.Version
+	} else {
+		return nil, nil
+	}
+
+	// no version set on imported cluster
+	if updateVersion == "" {
+		return nil, nil
+	}
+
+	// if node is running a version lower than what is in the spec
+	if ok, err := IsNewerVersion(node.Status.NodeInfo.KubeletVersion, updateVersion); err != nil {
+		return nil, err
+	} else if ok {
+		node = node.DeepCopy()
+		node.Labels[UpgradeEnabledLabel] = "true"
+		return n.nodesSyncer.nodeClient.Update(node)
+	}
+
 	return nil, nil
+}
+
+// IsNewerVersion returns true if updated versions semver is newer and false if its
+// semver is older. If semver is equal then metadata is alphanumerically compared.
+func IsNewerVersion(prevVersion, updatedVersion string) (bool, error) {
+	parseErrMsg := "failed to parse version: %v"
+	prevVer, err := semver.NewVersion(strings.TrimPrefix(prevVersion, "v"))
+	if err != nil {
+		return false, fmt.Errorf(parseErrMsg, err)
+	}
+
+	updatedVer, err := semver.NewVersion(strings.TrimPrefix(updatedVersion, "v"))
+	if err != nil {
+		return false, fmt.Errorf(parseErrMsg, err)
+	}
+
+	switch updatedVer.Compare(*prevVer) {
+	case -1:
+		return false, nil
+	case 1:
+		return true, nil
+	default:
+		// using metadata to determine precedence is against semver standards
+		// this is ignored because it because k3s uses it to precedence between
+		// two versions based on same k8s version
+		return updatedVer.Metadata > prevVer.Metadata, nil
+	}
 }
 
 func (n *nodeSyncer) needUpdate(_ string, node *corev1.Node) (bool, error) {
@@ -335,8 +419,7 @@ func (m *nodesSyncer) getNodePlan(node *apimgmtv3.Node) (rketypes.RKEConfigNodeP
 		return rketypes.RKEConfigNodePlan{}, err
 	}
 
-	appliedSpec := *cluster.Status.AppliedSpec.DeepCopy()
-	appliedSpec, err = secretmigrator.AssembleRKEConfigSpec(cluster, appliedSpec, m.secretLister)
+	appliedSpec, err := assemblers.AssembleRKEConfigSpec(cluster, *cluster.Status.AppliedSpec.DeepCopy(), m.secretLister)
 	if err != nil {
 		return rketypes.RKEConfigNodePlan{}, err
 	}
@@ -823,6 +906,32 @@ func (m *nodesSyncer) isClusterRestoring() (bool, error) {
 		cluster.Spec.RancherKubernetesEngineConfig.Restore.Restore {
 		return true, nil
 	}
+	if cluster.Status.Driver == "imported" {
+		return false, nil
+	}
+	if strings.HasPrefix(cluster.Name, "c-m-") {
+		provCluster, err := m.provClusterCache.Get(cluster.Spec.FleetWorkspaceName, cluster.Spec.DisplayName)
+		if err != nil {
+			return false, err
+		}
+		capiCluster, err := m.capiClusterCache.Get(provCluster.Namespace, provCluster.Name)
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if capiCluster.Spec.ControlPlaneRef.Kind != "RKEControlPlane" || capiCluster.Spec.ControlPlaneRef.APIVersion != "rke.cattle.io/v1" {
+			return false, nil
+		}
+		controlplane, err := m.rkeControlPlaneCache.Get(capiCluster.Spec.ControlPlaneRef.Namespace, capiCluster.Spec.ControlPlaneRef.Name)
+		if err != nil {
+			return false, err
+		}
+		phase := controlplane.Status.ETCDSnapshotRestorePhase
+		return phase != "" && phase != rkev1.ETCDSnapshotPhaseFinished && phase != rkev1.ETCDSnapshotPhaseFailed, nil
+	}
+
 	return false, nil
 }
 

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -14,10 +13,9 @@ import (
 	"github.com/rancher/channelserver/pkg/config"
 	"github.com/rancher/channelserver/pkg/model"
 	"github.com/rancher/channelserver/pkg/server"
-	"github.com/rancher/rancher/pkg/catalog/utils"
 	"github.com/rancher/rancher/pkg/settings"
-	"github.com/rancher/wrangler/pkg/data"
-	"github.com/rancher/wrangler/pkg/schemas"
+	"github.com/rancher/wrangler/v3/pkg/data"
+	"github.com/rancher/wrangler/v3/pkg/schemas"
 	"github.com/sirupsen/logrus"
 )
 
@@ -47,7 +45,7 @@ func GetURLAndInterval() (string, time.Duration) {
 // not a proper release version, the argument will be set to the dev version.
 func getChannelServerArg() string {
 	serverVersion := settings.ServerVersion.Get()
-	if !utils.ReleaseServerVersion(serverVersion) {
+	if !settings.IsReleaseServerVersion(serverVersion) {
 		return settings.RancherVersionDev
 	}
 	return serverVersion
@@ -171,7 +169,7 @@ func getDefaultFromAppDefaultsByRuntimeAndServerVersion(ctx context.Context, run
 		return "", fmt.Errorf("faild to parse %s defaultVersionRange for %s: %v", runtime, serverVersion, err)
 	}
 
-	var candidate []string
+	var candidate []semver.Version
 	for _, release := range config.ReleasesConfig().Releases {
 		version, err := semver.ParseTolerant(release.Version)
 		if err != nil {
@@ -179,14 +177,16 @@ func getDefaultFromAppDefaultsByRuntimeAndServerVersion(ctx context.Context, run
 			continue
 		}
 		if dvrParsed(version) {
-			candidate = append(candidate, release.Version)
+			candidate = append(candidate, version)
 		}
 	}
 	if len(candidate) == 0 {
 		return "", fmt.Errorf("no %s version is found for %s", runtime, serverVersion)
 	}
-	sort.Strings(candidate)
-	return candidate[len(candidate)-1], nil
+	// the build metadata parts are ignored when sorting versions for now;
+	// ideally they should be since k3s/RKE2 releases use it to establish order of precedence
+	semver.Sort(candidate)
+	return candidate[len(candidate)-1].String(), nil
 }
 
 func getDefaultFromChannel(ctx context.Context, runtime, channelName string) string {

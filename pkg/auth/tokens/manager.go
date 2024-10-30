@@ -16,18 +16,18 @@ import (
 	"github.com/rancher/norman/types/convert"
 	v32 "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
 	"github.com/rancher/rancher/pkg/auth/util"
+	"github.com/rancher/rancher/pkg/catalog/utils"
 	clientv3 "github.com/rancher/rancher/pkg/client/generated/management/v3"
 	v1 "github.com/rancher/rancher/pkg/generated/norman/core/v1"
 	v3 "github.com/rancher/rancher/pkg/generated/norman/management.cattle.io/v3"
 	"github.com/rancher/rancher/pkg/settings"
 	"github.com/rancher/rancher/pkg/types/config"
-	"github.com/rancher/wrangler/pkg/randomtoken"
+	"github.com/rancher/wrangler/v3/pkg/randomtoken"
 	"github.com/sirupsen/logrus"
 	apicorev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -46,6 +46,8 @@ const (
 
 var (
 	toDeleteCookies = []string{CookieName, CSRFCookie}
+	onLogoutAll     LogoutAllFunc
+	onLogout        LogoutFunc
 )
 
 func RegisterIndexer(apiContext *config.ScaledContext) error {
@@ -70,6 +72,18 @@ func NewManager(ctx context.Context, apiContext *config.ScaledContext) *Manager 
 	}
 }
 
+// OnLogoutAll registers a callback function to invoke when processing the norman action `logoutAll`.
+// Note: Callbacks set at runtime are used because a direct call causes circular package imports.
+func OnLogoutAll(logoutAllFunc LogoutAllFunc) {
+	onLogoutAll = logoutAllFunc
+}
+
+// OnLogout registers a callback function to invoke when processing the norman action `logout`.
+// Note: Callbacks set at runtime are used because a direct call causes circular package imports.
+func OnLogout(logoutFunc LogoutFunc) {
+	onLogout = logoutFunc
+}
+
 type Manager struct {
 	ctx                 context.Context
 	tokensClient        v3.TokenInterface
@@ -81,6 +95,20 @@ type Manager struct {
 	secrets             v1.SecretInterface
 	secretLister        v1.SecretLister
 }
+
+type (
+	// LogoutAllFunc is the signature of the callback function to invoke when
+	// processing the norman action `logoutAll`.
+	LogoutAllFunc func(apiContext *types.APIContext, token *v3.Token) error
+
+	// LogoutFunc is the signature of the callback function to invoke when
+	// processing the norman action `logout`.
+	LogoutFunc func(apiContext *types.APIContext, token *v3.Token) error
+
+	// Note: We use callback functions to link the token manager to the SAML
+	// providers at runtime because a static function call set at compile time
+	// is not possible. It would cause circular package imports.
+)
 
 func userPrincipalIndexer(obj interface{}) ([]string, error) {
 	user, ok := obj.(*v3.User)
@@ -188,7 +216,7 @@ func (m *Manager) getToken(tokenAuthValue string) (*v3.Token, int, error) {
 	return storedToken, 0, nil
 }
 
-// GetTokens will list all(login and derived, and even expired) tokens of the authenticated user
+// GetTokens will list all (login and derived, and even expired) tokens of the authenticated user
 func (m *Manager) getTokens(tokenAuthValue string) ([]v3.Token, int, error) {
 	logrus.Debug("LIST Tokens Invoked")
 	tokens := make([]v3.Token, 0)
@@ -212,21 +240,6 @@ func (m *Manager) getTokens(tokenAuthValue string) ([]v3.Token, int, error) {
 		tokens = append(tokens, t)
 	}
 	return tokens, 0, nil
-}
-
-func (m *Manager) deleteToken(tokenAuthValue string) (int, error) {
-	logrus.Debug("DELETE Token Invoked")
-
-	storedToken, status, err := m.getToken(tokenAuthValue)
-	if err != nil {
-		if status == 404 {
-			return 0, nil
-		} else if status != 410 {
-			return 401, err
-		}
-	}
-
-	return m.deleteTokenByName(storedToken.Name)
 }
 
 func (m *Manager) deleteTokenByName(tokenName string) (int, error) {
@@ -377,13 +390,34 @@ func (m *Manager) logout(actionName string, action *types.Action, request *types
 	}
 	w.Header().Add("Content-type", "application/json")
 
-	//getToken
-	status, err := m.deleteToken(tokenAuthValue)
+	storedToken, status, err := m.getToken(tokenAuthValue)
 	if err != nil {
-		logrus.Errorf("DeleteToken failed with error: %v", err)
-		if status == 0 {
+		logrus.Errorf("getToken failed with error: %v", err)
+		if status == http.StatusNotFound {
+			// 0
 			status = http.StatusInternalServerError
+			return httperror.NewAPIErrorLong(status, util.GetHTTPErrorCode(status), err.Error())
+		} else if status != http.StatusGone {
+			// 401
+			return httperror.NewAPIErrorLong(status, util.GetHTTPErrorCode(status), err.Error())
 		}
+	}
+
+	if actionName == "logoutAll" {
+		err := onLogoutAll(request, storedToken)
+		if err != nil {
+			return err
+		}
+	} else if actionName == "logout" {
+		err := onLogout(request, storedToken)
+		if err != nil {
+			return err
+		}
+	}
+
+	status, err = m.deleteTokenByName(storedToken.Name)
+	if err != nil {
+		logrus.Errorf("deleteTokenByName failed with error: %v", err)
 		return httperror.NewAPIErrorLong(status, util.GetHTTPErrorCode(status), fmt.Sprintf("%v", err))
 	}
 	return nil
@@ -571,44 +605,61 @@ func (m *Manager) EnsureAndGetUserAttribute(userID string) (*v3.UserAttribute, b
 	return attribs, true, nil
 }
 
-func (m *Manager) UserAttributeCreateOrUpdate(userID, provider string, groupPrincipals []v3.Principal, userExtraInfo map[string][]string) error {
+func (m *Manager) UserAttributeCreateOrUpdate(userID, provider string, groupPrincipals []v3.Principal, userExtraInfo map[string][]string, loginTime ...time.Time) error {
 	attribs, needCreate, err := m.EnsureAndGetUserAttribute(userID)
 	if err != nil {
 		return err
 	}
 
+	if attribs.GroupPrincipals == nil {
+		attribs.GroupPrincipals = make(map[string]v32.Principals)
+	}
+
+	if attribs.ExtraByProvider == nil {
+		attribs.ExtraByProvider = make(map[string]map[string][]string)
+	}
 	if userExtraInfo == nil {
 		userExtraInfo = make(map[string][]string)
 	}
+
+	shouldUpdate := m.userAttributeChanged(attribs, provider, userExtraInfo, groupPrincipals)
+	if len(loginTime) > 0 && !loginTime[0].IsZero() {
+		// Login time is truncated to seconds as the corresponding user label is set as epoch time.
+		lastLogin := metav1.NewTime(loginTime[0].Truncate(time.Second))
+		attribs.LastLogin = &lastLogin
+		shouldUpdate = true
+	}
+
+	attribs.GroupPrincipals[provider] = v32.Principals{Items: groupPrincipals}
+	attribs.ExtraByProvider[provider] = userExtraInfo
+
 	if needCreate {
-		attribs.GroupPrincipals[provider] = v32.Principals{Items: groupPrincipals}
-		attribs.ExtraByProvider[provider] = userExtraInfo
-		_, err := m.userAttributes.Create(attribs)
+		_, err = m.userAttributes.Create(attribs)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to create UserAttribute: %w", err)
 		}
+
 		return nil
 	}
 
-	// Exists, just update if necessary
-	if m.UserAttributeChanged(attribs, provider, userExtraInfo, groupPrincipals) {
-		if attribs.ExtraByProvider == nil {
-			attribs.ExtraByProvider = make(map[string]map[string][]string)
-		}
-		attribs.GroupPrincipals[provider] = v32.Principals{Items: groupPrincipals}
-		attribs.ExtraByProvider[provider] = userExtraInfo
-		_, err := m.userAttributes.Update(attribs)
+	if shouldUpdate {
+		_, err = m.userAttributes.Update(attribs)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to update UserAttribute: %w", err)
 		}
 	}
 
 	return nil
 }
 
-func (m *Manager) UserAttributeChanged(attribs *v32.UserAttribute, provider string, extraInfo map[string][]string, groupPrincipals []v32.Principal) bool {
+func (m *Manager) userAttributeChanged(attribs *v32.UserAttribute, provider string, extraInfo map[string][]string, groupPrincipals []v32.Principal) bool {
 	oldSet := []string{}
 	newSet := []string{}
+
+	if len(attribs.GroupPrincipals[provider].Items) != len(groupPrincipals) {
+		return true
+	}
+
 	for _, principal := range attribs.GroupPrincipals[provider].Items {
 		oldSet = append(oldSet, principal.ObjectMeta.Name)
 	}
@@ -617,10 +668,6 @@ func (m *Manager) UserAttributeChanged(attribs *v32.UserAttribute, provider stri
 	}
 	sort.Strings(oldSet)
 	sort.Strings(newSet)
-
-	if len(oldSet) != len(newSet) {
-		return true
-	}
 
 	for i := range oldSet {
 		if oldSet[i] != newSet[i] {
@@ -631,40 +678,21 @@ func (m *Manager) UserAttributeChanged(attribs *v32.UserAttribute, provider stri
 	if attribs.ExtraByProvider == nil && extraInfo != nil {
 		return true
 	}
-	if !reflect.DeepEqual(attribs.ExtraByProvider[provider], extraInfo) {
-		return true
-	}
 
-	return false
+	return !reflect.DeepEqual(attribs.ExtraByProvider[provider], extraInfo)
 }
 
-var uaBackoff = wait.Backoff{
-	Duration: time.Millisecond * 100,
-	Factor:   2,
-	Jitter:   .2,
-	Steps:    5,
-}
+// PerUserCacheProviders is a set of provider names for which the token manager creates a per-user login token.
+var PerUserCacheProviders = []string{"github", "azuread", "googleoauth", "oidc", "keycloakoidc", "genericoidc"}
 
-func (m *Manager) NewLoginToken(userID string, userPrincipal v3.Principal, groupPrincipals []v3.Principal, providerToken string, ttl int64, description string, userExtraInfo map[string][]string) (v3.Token, string, error) {
+func (m *Manager) NewLoginToken(userID string, userPrincipal v3.Principal, groupPrincipals []v3.Principal, providerToken string, ttl int64, description string) (v3.Token, string, error) {
 	provider := userPrincipal.Provider
 	// Providers that use oauth need to create a secret for storing the access token.
-	if (provider == "github" || provider == "azuread" || provider == "googleoauth" || provider == "oidc" || provider == "keycloakoidc") && providerToken != "" {
+	if utils.Contains(PerUserCacheProviders, provider) && providerToken != "" {
 		err := m.CreateSecret(userID, provider, providerToken)
 		if err != nil {
 			return v3.Token{}, "", fmt.Errorf("unable to create secret: %s", err)
 		}
-	}
-
-	err := wait.ExponentialBackoff(uaBackoff, func() (bool, error) {
-		err := m.UserAttributeCreateOrUpdate(userID, provider, groupPrincipals, userExtraInfo)
-		if err != nil {
-			logrus.Warnf("Problem creating or updating userAttribute for %v: %v", userID, err)
-		}
-		return err == nil, nil
-	})
-
-	if err != nil {
-		return v3.Token{}, "", errors.New("unable to create userAttribute")
 	}
 
 	token := &v3.Token{
@@ -680,6 +708,7 @@ func (m *Manager) NewLoginToken(userID string, userPrincipal v3.Principal, group
 			},
 		},
 	}
+
 	return m.createToken(token)
 }
 
@@ -701,18 +730,14 @@ func (m *Manager) GetGroupsForTokenAuthProvider(token *v3.Token) []v3.Principal 
 		for provider, y := range attribs.GroupPrincipals {
 			if provider == token.AuthProvider {
 				hitProvider = true
-				for _, principal := range y.Items {
-					groups = append(groups, principal)
-				}
+				groups = append(groups, y.Items...)
 			}
 		}
 	}
 
 	// fallback to legacy token groupPrincipals
 	if !hitProvider {
-		for _, principal := range token.GroupPrincipals {
-			groups = append(groups, principal)
-		}
+		groups = append(groups, token.GroupPrincipals...)
 	}
 
 	return groups
@@ -747,8 +772,8 @@ func (m *Manager) IsMemberOf(token v3.Token, group v3.Principal) bool {
 	return groups[group.Name]
 }
 
-func (m *Manager) CreateTokenAndSetCookie(userID string, userPrincipal v3.Principal, groupPrincipals []v3.Principal, providerToken string, ttl int, description string, request *types.APIContext, userExtraInfo map[string][]string) error {
-	token, unhashedTokenKey, err := m.NewLoginToken(userID, userPrincipal, groupPrincipals, providerToken, 0, description, userExtraInfo)
+func (m *Manager) CreateTokenAndSetCookie(userID string, userPrincipal v3.Principal, groupPrincipals []v3.Principal, providerToken string, ttl int, description string, request *types.APIContext) error {
+	token, unhashedTokenKey, err := m.NewLoginToken(userID, userPrincipal, groupPrincipals, providerToken, 0, description)
 	if err != nil {
 		logrus.Errorf("Failed creating token with error: %v", err)
 		return httperror.NewAPIErrorLong(500, "", fmt.Sprintf("Failed creating token with error: %v", err))

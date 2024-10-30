@@ -8,6 +8,7 @@ const (
 	DeploymentType                               = "deployment"
 	DeploymentFieldActiveDeadlineSeconds         = "activeDeadlineSeconds"
 	DeploymentFieldAnnotations                   = "annotations"
+	DeploymentFieldAppArmorProfile               = "appArmorProfile"
 	DeploymentFieldAutomountServiceAccountToken  = "automountServiceAccountToken"
 	DeploymentFieldContainers                    = "containers"
 	DeploymentFieldCreated                       = "created"
@@ -41,12 +42,14 @@ const (
 	DeploymentFieldPublicEndpoints               = "publicEndpoints"
 	DeploymentFieldReadinessGates                = "readinessGates"
 	DeploymentFieldRemoved                       = "removed"
+	DeploymentFieldResourceClaims                = "resourceClaims"
 	DeploymentFieldRestartPolicy                 = "restartPolicy"
 	DeploymentFieldRunAsGroup                    = "runAsGroup"
 	DeploymentFieldRunAsNonRoot                  = "runAsNonRoot"
 	DeploymentFieldRuntimeClassName              = "runtimeClassName"
 	DeploymentFieldScale                         = "scale"
 	DeploymentFieldScheduling                    = "scheduling"
+	DeploymentFieldSchedulingGates               = "schedulingGates"
 	DeploymentFieldSeccompProfile                = "seccompProfile"
 	DeploymentFieldSelector                      = "selector"
 	DeploymentFieldServiceAccountName            = "serviceAccountName"
@@ -54,6 +57,7 @@ const (
 	DeploymentFieldShareProcessNamespace         = "shareProcessNamespace"
 	DeploymentFieldState                         = "state"
 	DeploymentFieldSubdomain                     = "subdomain"
+	DeploymentFieldSupplementalGroupsPolicy      = "supplementalGroupsPolicy"
 	DeploymentFieldSysctls                       = "sysctls"
 	DeploymentFieldTerminationGracePeriodSeconds = "terminationGracePeriodSeconds"
 	DeploymentFieldTopologySpreadConstraints     = "topologySpreadConstraints"
@@ -72,6 +76,7 @@ type Deployment struct {
 	types.Resource
 	ActiveDeadlineSeconds         *int64                         `json:"activeDeadlineSeconds,omitempty" yaml:"activeDeadlineSeconds,omitempty"`
 	Annotations                   map[string]string              `json:"annotations,omitempty" yaml:"annotations,omitempty"`
+	AppArmorProfile               *AppArmorProfile               `json:"appArmorProfile,omitempty" yaml:"appArmorProfile,omitempty"`
 	AutomountServiceAccountToken  *bool                          `json:"automountServiceAccountToken,omitempty" yaml:"automountServiceAccountToken,omitempty"`
 	Containers                    []Container                    `json:"containers,omitempty" yaml:"containers,omitempty"`
 	Created                       string                         `json:"created,omitempty" yaml:"created,omitempty"`
@@ -105,12 +110,14 @@ type Deployment struct {
 	PublicEndpoints               []PublicEndpoint               `json:"publicEndpoints,omitempty" yaml:"publicEndpoints,omitempty"`
 	ReadinessGates                []PodReadinessGate             `json:"readinessGates,omitempty" yaml:"readinessGates,omitempty"`
 	Removed                       string                         `json:"removed,omitempty" yaml:"removed,omitempty"`
+	ResourceClaims                []PodResourceClaim             `json:"resourceClaims,omitempty" yaml:"resourceClaims,omitempty"`
 	RestartPolicy                 string                         `json:"restartPolicy,omitempty" yaml:"restartPolicy,omitempty"`
 	RunAsGroup                    *int64                         `json:"runAsGroup,omitempty" yaml:"runAsGroup,omitempty"`
 	RunAsNonRoot                  *bool                          `json:"runAsNonRoot,omitempty" yaml:"runAsNonRoot,omitempty"`
 	RuntimeClassName              string                         `json:"runtimeClassName,omitempty" yaml:"runtimeClassName,omitempty"`
 	Scale                         *int64                         `json:"scale,omitempty" yaml:"scale,omitempty"`
 	Scheduling                    *Scheduling                    `json:"scheduling,omitempty" yaml:"scheduling,omitempty"`
+	SchedulingGates               []PodSchedulingGate            `json:"schedulingGates,omitempty" yaml:"schedulingGates,omitempty"`
 	SeccompProfile                *SeccompProfile                `json:"seccompProfile,omitempty" yaml:"seccompProfile,omitempty"`
 	Selector                      *LabelSelector                 `json:"selector,omitempty" yaml:"selector,omitempty"`
 	ServiceAccountName            string                         `json:"serviceAccountName,omitempty" yaml:"serviceAccountName,omitempty"`
@@ -118,6 +125,7 @@ type Deployment struct {
 	ShareProcessNamespace         *bool                          `json:"shareProcessNamespace,omitempty" yaml:"shareProcessNamespace,omitempty"`
 	State                         string                         `json:"state,omitempty" yaml:"state,omitempty"`
 	Subdomain                     string                         `json:"subdomain,omitempty" yaml:"subdomain,omitempty"`
+	SupplementalGroupsPolicy      string                         `json:"supplementalGroupsPolicy,omitempty" yaml:"supplementalGroupsPolicy,omitempty"`
 	Sysctls                       []Sysctl                       `json:"sysctls,omitempty" yaml:"sysctls,omitempty"`
 	TerminationGracePeriodSeconds *int64                         `json:"terminationGracePeriodSeconds,omitempty" yaml:"terminationGracePeriodSeconds,omitempty"`
 	TopologySpreadConstraints     []TopologySpreadConstraint     `json:"topologySpreadConstraints,omitempty" yaml:"topologySpreadConstraints,omitempty"`

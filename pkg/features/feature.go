@@ -61,7 +61,13 @@ var (
 		false)
 	EmbeddedClusterAPI = newFeature(
 		"embedded-cluster-api",
-		"Enable an embedded instance of cluster-api core controller",
+		"Enable a Rancher-managed instance of cluster-api core controller",
+		true,
+		false,
+		false)
+	ManagedSystemUpgradeController = newFeature(
+		"managed-system-upgrade-controller",
+		"Enable the installation of the system-upgrade-controller app as a managed system chart",
 		true,
 		false,
 		false)
@@ -83,12 +89,6 @@ var (
 		true,
 		false,
 		false)
-	MonitoringV1 = newFeature(
-		"monitoringv1",
-		"Enable support for monitoring v1 in downstream clusters. The legacy feature flag is required to be enabled",
-		true,
-		false,
-		false)
 	TokenHashing = newFeature(
 		"token-hashing",
 		"Enable one way hashing of tokens. Once enabled token hashing can not be disabled",
@@ -105,6 +105,43 @@ var (
 		"rke1-custom-node-cleanup",
 		"Enable cleanup RKE1 custom cluster nodes when they are deleted",
 		true,
+		true,
+		true)
+	HarvesterBaremetalContainerWorkload = newFeature(
+		"harvester-baremetal-container-workload",
+		"[Experimental]: Deploy container workloads to underlying harvester cluster",
+		false,
+		true,
+		true)
+	ProvisioningV2FleetWorkspaceBackPopulation = newFeature(
+		"provisioningv2-fleet-workspace-back-population",
+		"[Experimental]: Allow Fleet workspace name to be changed on clusters administrated by provisioning v2",
+		false,
+		false,
+		true)
+	UIExtension = newFeature(
+		"uiextension",
+		"Enable UI Extensions when starting Rancher",
+		true,
+		false,
+		true,
+	)
+	UISQLCache = newFeature(
+		"ui-sql-cache",
+		"[Experimental]: Enable SQLite-backed caching to improve performance and provide additional UI sorting/filtering features.",
+		false,
+		false,
+		true)
+	RKE1UI = newFeature(
+		"rke1-ui",
+		"Enable RKE1 provisioning in the Rancher UI",
+		true,
+		true,
+		true)
+	ProvisioningPreBootstrap = newFeature(
+		"provisioningprebootstrap",
+		"Support running pre-bootstrap workloads on downstream clusters",
+		false,
 		true,
 		true)
 )
@@ -132,6 +169,12 @@ func InitializeFeatures(featuresClient managementv3.FeatureClient, featureArgs s
 
 	if featuresClient == nil {
 		return
+	}
+
+	// external-rules feature flag was removed in 2.9. We need to delete it for users upgrading from 2.8.
+	err := featuresClient.Delete("external-rules", &metav1.DeleteOptions{})
+	if err != nil && !errors.IsNotFound(err) {
+		logrus.Errorf("unable to delete external-rules feature: %v", err)
 	}
 
 	// creates any features in map that do not exist, updates features with new default value

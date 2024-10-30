@@ -4,22 +4,26 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 
 	v3 "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
 	mgmtcontrollers "github.com/rancher/rancher/pkg/generated/controllers/management.cattle.io/v3"
 	"github.com/rancher/rancher/pkg/namespace"
 	"github.com/rancher/rancher/pkg/serviceaccounttoken"
 	"github.com/rancher/rancher/pkg/settings"
+	"github.com/rancher/rancher/pkg/utils"
 	"github.com/rancher/rancher/pkg/wrangler"
-	appscontrollers "github.com/rancher/wrangler/pkg/generated/controllers/apps/v1"
-	corev1controllers "github.com/rancher/wrangler/pkg/generated/controllers/core/v1"
-	"github.com/rancher/wrangler/pkg/name"
-	"github.com/rancher/wrangler/pkg/relatedresource"
+	appscontrollers "github.com/rancher/wrangler/v3/pkg/generated/controllers/apps/v1"
+	corev1controllers "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
+	"github.com/rancher/wrangler/v3/pkg/name"
+	"github.com/rancher/wrangler/v3/pkg/relatedresource"
 	corev1 "k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	apierror "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 )
 
 type handler struct {
@@ -32,6 +36,7 @@ type handler struct {
 	apiServices     mgmtcontrollers.APIServiceCache
 	services        corev1controllers.ServiceCache
 	embedded        bool
+	k8s             kubernetes.Interface
 	ctx             context.Context
 }
 
@@ -46,6 +51,7 @@ func Register(ctx context.Context, context *wrangler.Context, embedded bool) {
 		apiServices:     context.Mgmt.APIService().Cache(),
 		services:        context.Core.Service().Cache(),
 		embedded:        embedded,
+		k8s:             context.K8s,
 		ctx:             ctx,
 	}
 
@@ -142,35 +148,12 @@ func (h *handler) getToken(sa *corev1.ServiceAccount) (string, error) {
 		return "", err
 	}
 
-	// create a secret-based token for the service account
-	sName := serviceaccounttoken.ServiceAccountSecretName(sa)
-	secret, err := h.secretsCache.Get(sa.Namespace, sName)
+	// create a secret-based token for the service account if one does not exist
+	secret, err := serviceaccounttoken.EnsureSecretForServiceAccount(h.ctx, h.secretsCache, h.k8s, sa, utils.FormatPrefix("local"))
 	if err != nil {
-		if !apierror.IsNotFound(err) {
-			return "", err
-		}
-		sc := serviceaccounttoken.SecretTemplate(sa)
-		secret, err = h.secretsClient.Create(sc)
-		if err != nil {
-			if !apierror.IsAlreadyExists(err) {
-				return "", err
-			}
-			secret, err = h.secretsCache.Get(sa.Namespace, sName)
-			if err != nil {
-				if !apierror.IsNotFound(err) {
-					return "", err
-				}
-				secret, err = h.secretsClient.Get(sa.Namespace, sName, metav1.GetOptions{})
-				if err != nil {
-					return "", err
-				}
-			}
-		}
+		return "", fmt.Errorf("error ensuring secret for service account [%s:%s]: %w", sa.Namespace, sa.Name, err)
 	}
-	token := secret.Data["token"]
-	if len(token) == 0 {
-		return "", nil
-	}
+	token := secret.Data[v1.ServiceAccountTokenKey]
 
 	hash := sha256.Sum256(token)
 	return base64.StdEncoding.EncodeToString(hash[:]), nil

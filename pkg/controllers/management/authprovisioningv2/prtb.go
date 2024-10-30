@@ -10,7 +10,7 @@ import (
 	v3 "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
 	v1 "github.com/rancher/rancher/pkg/apis/provisioning.cattle.io/v1"
 	"github.com/rancher/rancher/pkg/rbac"
-	"github.com/rancher/wrangler/pkg/name"
+	"github.com/rancher/wrangler/v3/pkg/name"
 	"github.com/sirupsen/logrus"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -19,7 +19,7 @@ import (
 const PRTBRoleBindingID = "auth-prov-v2-prtb-rolebinding"
 
 func (h *handler) OnPRTB(key string, prtb *v3.ProjectRoleTemplateBinding) (*v3.ProjectRoleTemplateBinding, error) {
-	if prtb == nil || prtb.DeletionTimestamp != nil || prtb.RoleTemplateName == "" || prtb.ProjectName == "" {
+	if prtb == nil || prtb.DeletionTimestamp != nil || prtb.RoleTemplateName == "" || prtb.ProjectName == "" || prtb.ServiceAccount != "" {
 		return prtb, nil
 	}
 

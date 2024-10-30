@@ -10,6 +10,7 @@ import (
 	"github.com/rancher/rancher/pkg/controllers/managementagent/nslabels"
 	"github.com/rancher/rancher/pkg/controllers/managementuserlegacy/helm"
 	v3 "github.com/rancher/rancher/pkg/generated/norman/management.cattle.io/v3"
+	"github.com/rancher/rancher/pkg/image"
 	"github.com/rancher/rancher/pkg/settings"
 	"github.com/rancher/rancher/pkg/types/config"
 	"github.com/sirupsen/logrus"
@@ -21,6 +22,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
+)
+
+const (
+	WebhookClusterRoleBindingName = "rancher-webhook"
+	WebhookConfigurationName      = "rancher.cattle.io"
 )
 
 var (
@@ -206,29 +212,35 @@ func (c *ClusterLifecycleCleanup) createCleanupClusterRole(userContext *config.U
 
 	rules := []rbacV1.PolicyRule{
 		// This is needed to check for cattle-system, remove finalizers and delete
-		rbacV1.PolicyRule{
+		{
 			Verbs:     []string{"list", "get", "update", "delete"},
 			APIGroups: []string{""},
 			Resources: []string{"namespaces"},
 		},
-		rbacV1.PolicyRule{
+		{
 			Verbs:     []string{"list", "get", "delete"},
 			APIGroups: []string{"rbac.authorization.k8s.io"},
 			Resources: []string{"roles", "rolebindings", "clusterroles", "clusterrolebindings"},
 		},
 		// The job is going to delete itself after running to trigger ownerReference
 		// cleanup of the clusterRole, serviceAccount and clusterRoleBinding
-		rbacV1.PolicyRule{
+		{
 			Verbs:     []string{"list", "get", "delete"},
 			APIGroups: []string{"batch"},
 			Resources: []string{"jobs"},
 		},
 		// The job checks for the presence of the rancher service first
-		rbacV1.PolicyRule{
+		{
 			Verbs:         []string{"get"},
 			APIGroups:     []string{""},
 			Resources:     []string{"services"},
 			ResourceNames: []string{"rancher"},
+		},
+		{
+			Verbs:         []string{"delete"},
+			APIGroups:     []string{"admissionregistration.k8s.io"},
+			Resources:     []string{"validatingwebhookconfigurations", "mutatingwebhookconfigurations"},
+			ResourceNames: []string{WebhookConfigurationName},
 		},
 	}
 	clusterRole := rbacV1.ClusterRole{
@@ -291,7 +303,7 @@ func (c *ClusterLifecycleCleanup) createCleanupJob(userContext *config.UserConte
 					Containers: []coreV1.Container{
 						coreV1.Container{
 							Name:  "cleanup-agent",
-							Image: settings.AgentImage.Get(),
+							Image: image.Resolve(settings.AgentImage.Get()),
 							Env: []coreV1.EnvVar{
 								coreV1.EnvVar{
 									Name:  "CLUSTER_CLEANUP",

@@ -19,6 +19,7 @@ const (
 	FreeIpaConfigFieldGroupSearchBase                 = "groupSearchBase"
 	FreeIpaConfigFieldGroupSearchFilter               = "groupSearchFilter"
 	FreeIpaConfigFieldLabels                          = "labels"
+	FreeIpaConfigFieldLogoutAllSupported              = "logoutAllSupported"
 	FreeIpaConfigFieldName                            = "name"
 	FreeIpaConfigFieldOwnerReferences                 = "ownerReferences"
 	FreeIpaConfigFieldPort                            = "port"
@@ -27,6 +28,7 @@ const (
 	FreeIpaConfigFieldServiceAccountDistinguishedName = "serviceAccountDistinguishedName"
 	FreeIpaConfigFieldServiceAccountPassword          = "serviceAccountPassword"
 	FreeIpaConfigFieldStartTLS                        = "starttls"
+	FreeIpaConfigFieldStatus                          = "status"
 	FreeIpaConfigFieldTLS                             = "tls"
 	FreeIpaConfigFieldType                            = "type"
 	FreeIpaConfigFieldUUID                            = "uuid"
@@ -59,6 +61,7 @@ type FreeIpaConfig struct {
 	GroupSearchBase                 string            `json:"groupSearchBase,omitempty" yaml:"groupSearchBase,omitempty"`
 	GroupSearchFilter               string            `json:"groupSearchFilter,omitempty" yaml:"groupSearchFilter,omitempty"`
 	Labels                          map[string]string `json:"labels,omitempty" yaml:"labels,omitempty"`
+	LogoutAllSupported              bool              `json:"logoutAllSupported,omitempty" yaml:"logoutAllSupported,omitempty"`
 	Name                            string            `json:"name,omitempty" yaml:"name,omitempty"`
 	OwnerReferences                 []OwnerReference  `json:"ownerReferences,omitempty" yaml:"ownerReferences,omitempty"`
 	Port                            int64             `json:"port,omitempty" yaml:"port,omitempty"`
@@ -67,6 +70,7 @@ type FreeIpaConfig struct {
 	ServiceAccountDistinguishedName string            `json:"serviceAccountDistinguishedName,omitempty" yaml:"serviceAccountDistinguishedName,omitempty"`
 	ServiceAccountPassword          string            `json:"serviceAccountPassword,omitempty" yaml:"serviceAccountPassword,omitempty"`
 	StartTLS                        bool              `json:"starttls,omitempty" yaml:"starttls,omitempty"`
+	Status                          *AuthConfigStatus `json:"status,omitempty" yaml:"status,omitempty"`
 	TLS                             bool              `json:"tls,omitempty" yaml:"tls,omitempty"`
 	Type                            string            `json:"type,omitempty" yaml:"type,omitempty"`
 	UUID                            string            `json:"uuid,omitempty" yaml:"uuid,omitempty"`

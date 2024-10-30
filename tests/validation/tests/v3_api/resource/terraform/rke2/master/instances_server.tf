@@ -15,10 +15,20 @@ resource "aws_instance" "master" {
   subnet_id = var.subnets
   availability_zone = var.availability_zone
   vpc_security_group_ids = ["${var.sg_id}"]
-  key_name = "jenkins-rke-validation"
+  key_name = var.access_key_name
   tags = {
     Name = "${var.resource_name}-server"
     "kubernetes.io/cluster/clusterid" = "owned"
+  }
+  provisioner "file" {
+    source      = "../../scripts/optional_write_files.sh"
+    destination = "/tmp/optional_write_files.sh"
+  }
+  provisioner "remote-exec" {
+    inline = [
+      "chmod +x /tmp/optional_write_files.sh",
+      "sudo /tmp/optional_write_files.sh \"${var.optional_files}\"",
+    ]
   }
   provisioner "file" {
     source      = "define_node_role.sh"
@@ -75,12 +85,22 @@ resource "aws_instance" "master2" {
   subnet_id = var.subnets
   availability_zone = var.availability_zone
   vpc_security_group_ids = ["${var.sg_id}"]
-  key_name = "jenkins-rke-validation"
+  key_name = var.access_key_name
   tags = {
     Name = "${var.resource_name}-servers"
     "kubernetes.io/cluster/clusterid" = "owned"
   }
   depends_on       = ["aws_instance.master"]
+  provisioner "file" {
+    source      = "../../scripts/optional_write_files.sh"
+    destination = "/tmp/optional_write_files.sh"
+  }
+  provisioner "remote-exec" {
+    inline = [
+      "chmod +x /tmp/optional_write_files.sh",
+      "sudo /tmp/optional_write_files.sh \"${var.optional_files}\"",
+    ]
+  }
   provisioner "file" {
     source      = "define_node_role.sh"
     destination = "/tmp/define_node_role.sh"

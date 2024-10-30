@@ -70,7 +70,7 @@ tests:
   asserts:
   - equal:
       path: spec.template.spec.containers[1].image
-      value: rancher/mirrored-bci-micro:15.4.14.3
+      value: rancher/mirrored-bci-micro:15.6.24.2
 - it: should override auditLog.image.repository value when auditLog.destination is sidecar and auditLog.level > 0 and both auditLog.image.repository and auditLog.image.tag are set
   set:
     auditLog:
@@ -197,13 +197,13 @@ tests:
     customLogos.enabled: true
     customLogos.volumeKind: configMap
   asserts:
-  - isNull:
+  - isNullOrEmpty:
       path: spec.template.spec.volumes
 - it: should not create custom-logos volume if not customLogos.enabled
   set:
     customLogos.enabled: false
   asserts:
-  - isNull:
+  - isNullOrEmpty:
       path: spec.template.spec.volumes
 - it: should mount custom-logos volume with default subpaths if customLogos.enabled and customLogos.volumeKind=persistentVolumeClaim
   set:
@@ -323,13 +323,13 @@ tests:
     customLogos.enabled: true
     customLogos.volumeKind: configMap
   asserts:
-  - isNull:
+  - isNullOrEmpty:
       path: spec.template.spec.containers[0].volumeMounts
 - it: should not mount custom-logos volume if not customLogos.enabled
   set:
     customLogos.enabled: false
   asserts:
-  - isNull:
+  - isNullOrEmpty:
       path: spec.template.spec.containers[0].volumeMounts
 - it: should set priorityClassName=system-node-critical
   set:
@@ -342,10 +342,215 @@ tests:
   set:
     priorityClassName: ""
   asserts:
-    - isNull:
+    - isNullOrEmpty:
         path: spec.template.spec.priorityClassName
 - it: should default priorityClassName="rancher-critical"
   asserts:
     - equal:
         path: spec.template.spec.priorityClassName
         value: "rancher-critical"
+- it: should not set a livenessProbe initialDelaySeconds by default
+  asserts:
+    - notExists:
+        path: spec.template.spec.containers[0].livenessProbe.initialDelaySeconds
+- it: should set livenessProbe periodSeconds defaults
+  asserts:
+    - equal:
+        path: spec.template.spec.containers[0].livenessProbe.periodSeconds
+        value: 30
+    - equal:
+        path: spec.template.spec.containers[0].livenessProbe.timeoutSeconds
+        value: 5
+    - equal:
+        path: spec.template.spec.containers[0].livenessProbe.failureThreshold
+        value: 5
+- it: should not set readinessProbe initialDelaySeconds by default
+  asserts:
+    - notExists:
+        path: spec.template.spec.containers[0].readinessProbe.initialDelaySeconds
+- it: should set readinessProbe periodSeconds defaults
+  asserts:
+    - equal:
+        path: spec.template.spec.containers[0].readinessProbe.periodSeconds
+        value: 30
+    - equal:
+        path: spec.template.spec.containers[0].readinessProbe.timeoutSeconds
+        value: 5
+    - equal:
+        path: spec.template.spec.containers[0].readinessProbe.failureThreshold
+        value: 5
+- it: should set livenessProbe initialDelaySeconds to 90
+  set:
+    livenessProbe.initialDelaySeconds: 90
+  asserts:
+    - equal:
+        path: spec.template.spec.containers[0].livenessProbe.initialDelaySeconds
+        value: 90
+- it: should set livenessProbe periodSeconds to 60
+  set:
+    livenessProbe.periodSeconds: 60
+  asserts:
+    - equal:
+        path: spec.template.spec.containers[0].livenessProbe.periodSeconds
+        value: 60
+- it: should set readinessProbe initialDelaySeconds to 20
+  set:
+    readinessProbe.initialDelaySeconds: 20
+  asserts:
+    - equal:
+        path: spec.template.spec.containers[0].readinessProbe.initialDelaySeconds
+        value: 20
+- it: should set readinessProbe periodSeconds to 60
+  set:
+    readinessProbe.periodSeconds: 60
+  asserts:
+    - equal:
+        path: spec.template.spec.containers[0].readinessProbe.periodSeconds
+        value: 60
+- it: should always have a startupProbe
+  asserts:
+    - equal:
+        path: spec.template.spec.containers[0].startupProbe.httpGet.port
+        value: 80
+    - equal:
+        path: spec.template.spec.containers[0].startupProbe.httpGet.path
+        value: /healthz
+    - equal:
+        path: spec.template.spec.containers[0].startupProbe.timeoutSeconds
+        value: 5
+    - equal:
+        path: spec.template.spec.containers[0].startupProbe.failureThreshold
+        value: 12
+    - equal:
+        path: spec.template.spec.containers[0].startupProbe.periodSeconds
+        value: 10
+- it: allows configuring startupProbe values
+  set:
+    startupProbe.timeoutSeconds: 2
+    startupProbe.failureThreshold: 10
+    startupProbe.periodSeconds: 15
+  asserts:
+    - equal:
+        path: spec.template.spec.containers[0].startupProbe.timeoutSeconds
+        value: 2
+    - equal:
+        path: spec.template.spec.containers[0].startupProbe.failureThreshold
+        value: 10
+    - equal:
+        path: spec.template.spec.containers[0].startupProbe.periodSeconds
+        value: 15
+- it: should add CATTLE_AGENT_TLS_MODE=strict to env and maintain default vars
+  set:
+    agentTLSMode: "strict"
+  asserts:
+    - contains:
+        path: spec.template.spec.containers[0].env
+        content:
+          name: CATTLE_AGENT_TLS_MODE
+          value: "strict"
+    - contains:
+        path: spec.template.spec.containers[0].env
+        content:
+          name: CATTLE_PEER_SERVICE
+          value: RELEASE-NAME-rancher
+    - contains:
+        path: spec.template.spec.containers[0].env
+        content:
+          name: CATTLE_NAMESPACE
+          value: NAMESPACE
+- it: should add CATTLE_AGENT_TLS_MODE=system-store to env and maintain default vars
+  set:
+    agentTLSMode: "system-store"
+  asserts:
+    - contains:
+        path: spec.template.spec.containers[0].env
+        content:
+          name: CATTLE_AGENT_TLS_MODE
+          value: "system-store"
+    - contains:
+        path: spec.template.spec.containers[0].env
+        content:
+          name: CATTLE_PEER_SERVICE
+          value: RELEASE-NAME-rancher
+    - contains:
+        path: spec.template.spec.containers[0].env
+        content:
+          name: CATTLE_NAMESPACE
+          value: NAMESPACE
+- it: should not add (null) CATTLE_AGENT_TLS_MODE to env and maintain default vars
+  set:
+    agentTLSMode: null
+  asserts:
+    - notContains:
+        path: spec.template.spec.containers[0].env
+        content:
+          name: CATTLE_AGENT_TLS_MODE
+          value: "strict"
+    - notContains:
+        path: spec.template.spec.containers[0].env
+        content:
+          name: CATTLE_AGENT_TLS_MODE
+          value: "system-store"
+    - notContains:
+            path: spec.template.spec.containers[0].env
+            content:
+              name: CATTLE_AGENT_TLS_MODE
+              value: ""
+    - notContains:
+        path: spec.template.spec.containers[0].env
+        content:
+          name: CATTLE_AGENT_TLS_MODE
+          value: null
+    - contains:
+        path: spec.template.spec.containers[0].env
+        content:
+          name: CATTLE_PEER_SERVICE
+          value: RELEASE-NAME-rancher
+    - contains:
+        path: spec.template.spec.containers[0].env
+        content:
+          name: CATTLE_NAMESPACE
+          value: NAMESPACE
+- it: should not add ("") CATTLE_AGENT_TLS_MODE to env and maintain default vars
+  set:
+    agentTLSMode: ""
+  asserts:
+    - notContains:
+        path: spec.template.spec.containers[0].env
+        content:
+          name: CATTLE_AGENT_TLS_MODE
+          value: "strict"
+    - notContains:
+        path: spec.template.spec.containers[0].env
+        content:
+          name: CATTLE_AGENT_TLS_MODE
+          value: "system-store"
+    - notContains:
+        path: spec.template.spec.containers[0].env
+        content:
+          name: CATTLE_AGENT_TLS_MODE
+          value: ""
+    - notContains:
+        path: spec.template.spec.containers[0].env
+        content:
+          name: CATTLE_AGENT_TLS_MODE
+          value: null
+    - contains:
+        path: spec.template.spec.containers[0].env
+        content:
+          name: CATTLE_PEER_SERVICE
+          value: RELEASE-NAME-rancher
+    - contains:
+        path: spec.template.spec.containers[0].env
+        content:
+          name: CATTLE_NAMESPACE
+          value: NAMESPACE
+- it: sets extraTolerations
+  set:
+    extraTolerations:
+      - key: "node.cloudprovider.kubernetes.io/uninitialized"
+        value: "true"
+        effect: "NoSchedule"
+  asserts:
+    - exists:
+        path: spec.template.spec.tolerations[1]

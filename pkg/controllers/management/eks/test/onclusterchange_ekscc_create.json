@@ -10,6 +10,7 @@
     "loggingTypes": [],
     "nodeGroups": [
       {
+        "arm": false,
         "desiredSize": 2,
         "diskSize": 20,
         "ec2SshKey": "",
@@ -34,6 +35,7 @@
     "privateAccess": false,
     "publicAccess": true,
     "publicAccessSources": [],
+    "ebsCSIDriver": false,
     "region": "us-east-2",
     "secretsEncryption": false,
     "securityGroups": [],

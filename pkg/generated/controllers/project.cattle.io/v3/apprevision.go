@@ -1,5 +1,5 @@
 /*
-Copyright 2022 Rancher Labs, Inc.
+Copyright 2024 Rancher Labs, Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,262 +20,54 @@ package v3
 
 import (
 	"context"
+	"sync"
 	"time"
 
-	"github.com/rancher/lasso/pkg/client"
-	"github.com/rancher/lasso/pkg/controller"
 	v3 "github.com/rancher/rancher/pkg/apis/project.cattle.io/v3"
-	"github.com/rancher/wrangler/pkg/apply"
-	"github.com/rancher/wrangler/pkg/condition"
-	"github.com/rancher/wrangler/pkg/generic"
-	"github.com/rancher/wrangler/pkg/kv"
+	"github.com/rancher/wrangler/v3/pkg/apply"
+	"github.com/rancher/wrangler/v3/pkg/condition"
+	"github.com/rancher/wrangler/v3/pkg/generic"
+	"github.com/rancher/wrangler/v3/pkg/kv"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	"k8s.io/apimachinery/pkg/watch"
-	"k8s.io/client-go/tools/cache"
 )
 
-type AppRevisionHandler func(string, *v3.AppRevision) (*v3.AppRevision, error)
-
+// AppRevisionController interface for managing AppRevision resources.
 type AppRevisionController interface {
-	generic.ControllerMeta
-	AppRevisionClient
-
-	OnChange(ctx context.Context, name string, sync AppRevisionHandler)
-	OnRemove(ctx context.Context, name string, sync AppRevisionHandler)
-	Enqueue(namespace, name string)
-	EnqueueAfter(namespace, name string, duration time.Duration)
-
-	Cache() AppRevisionCache
+	generic.ControllerInterface[*v3.AppRevision, *v3.AppRevisionList]
 }
 
+// AppRevisionClient interface for managing AppRevision resources in Kubernetes.
 type AppRevisionClient interface {
-	Create(*v3.AppRevision) (*v3.AppRevision, error)
-	Update(*v3.AppRevision) (*v3.AppRevision, error)
-	UpdateStatus(*v3.AppRevision) (*v3.AppRevision, error)
-	Delete(namespace, name string, options *metav1.DeleteOptions) error
-	Get(namespace, name string, options metav1.GetOptions) (*v3.AppRevision, error)
-	List(namespace string, opts metav1.ListOptions) (*v3.AppRevisionList, error)
-	Watch(namespace string, opts metav1.ListOptions) (watch.Interface, error)
-	Patch(namespace, name string, pt types.PatchType, data []byte, subresources ...string) (result *v3.AppRevision, err error)
+	generic.ClientInterface[*v3.AppRevision, *v3.AppRevisionList]
 }
 
+// AppRevisionCache interface for retrieving AppRevision resources in memory.
 type AppRevisionCache interface {
-	Get(namespace, name string) (*v3.AppRevision, error)
-	List(namespace string, selector labels.Selector) ([]*v3.AppRevision, error)
-
-	AddIndexer(indexName string, indexer AppRevisionIndexer)
-	GetByIndex(indexName, key string) ([]*v3.AppRevision, error)
+	generic.CacheInterface[*v3.AppRevision]
 }
 
-type AppRevisionIndexer func(obj *v3.AppRevision) ([]string, error)
-
-type appRevisionController struct {
-	controller    controller.SharedController
-	client        *client.Client
-	gvk           schema.GroupVersionKind
-	groupResource schema.GroupResource
-}
-
-func NewAppRevisionController(gvk schema.GroupVersionKind, resource string, namespaced bool, controller controller.SharedControllerFactory) AppRevisionController {
-	c := controller.ForResourceKind(gvk.GroupVersion().WithResource(resource), gvk.Kind, namespaced)
-	return &appRevisionController{
-		controller: c,
-		client:     c.Client(),
-		gvk:        gvk,
-		groupResource: schema.GroupResource{
-			Group:    gvk.Group,
-			Resource: resource,
-		},
-	}
-}
-
-func FromAppRevisionHandlerToHandler(sync AppRevisionHandler) generic.Handler {
-	return func(key string, obj runtime.Object) (ret runtime.Object, err error) {
-		var v *v3.AppRevision
-		if obj == nil {
-			v, err = sync(key, nil)
-		} else {
-			v, err = sync(key, obj.(*v3.AppRevision))
-		}
-		if v == nil {
-			return nil, err
-		}
-		return v, err
-	}
-}
-
-func (c *appRevisionController) Updater() generic.Updater {
-	return func(obj runtime.Object) (runtime.Object, error) {
-		newObj, err := c.Update(obj.(*v3.AppRevision))
-		if newObj == nil {
-			return nil, err
-		}
-		return newObj, err
-	}
-}
-
-func UpdateAppRevisionDeepCopyOnChange(client AppRevisionClient, obj *v3.AppRevision, handler func(obj *v3.AppRevision) (*v3.AppRevision, error)) (*v3.AppRevision, error) {
-	if obj == nil {
-		return obj, nil
-	}
-
-	copyObj := obj.DeepCopy()
-	newObj, err := handler(copyObj)
-	if newObj != nil {
-		copyObj = newObj
-	}
-	if obj.ResourceVersion == copyObj.ResourceVersion && !equality.Semantic.DeepEqual(obj, copyObj) {
-		return client.Update(copyObj)
-	}
-
-	return copyObj, err
-}
-
-func (c *appRevisionController) AddGenericHandler(ctx context.Context, name string, handler generic.Handler) {
-	c.controller.RegisterHandler(ctx, name, controller.SharedControllerHandlerFunc(handler))
-}
-
-func (c *appRevisionController) AddGenericRemoveHandler(ctx context.Context, name string, handler generic.Handler) {
-	c.AddGenericHandler(ctx, name, generic.NewRemoveHandler(name, c.Updater(), handler))
-}
-
-func (c *appRevisionController) OnChange(ctx context.Context, name string, sync AppRevisionHandler) {
-	c.AddGenericHandler(ctx, name, FromAppRevisionHandlerToHandler(sync))
-}
-
-func (c *appRevisionController) OnRemove(ctx context.Context, name string, sync AppRevisionHandler) {
-	c.AddGenericHandler(ctx, name, generic.NewRemoveHandler(name, c.Updater(), FromAppRevisionHandlerToHandler(sync)))
-}
-
-func (c *appRevisionController) Enqueue(namespace, name string) {
-	c.controller.Enqueue(namespace, name)
-}
-
-func (c *appRevisionController) EnqueueAfter(namespace, name string, duration time.Duration) {
-	c.controller.EnqueueAfter(namespace, name, duration)
-}
-
-func (c *appRevisionController) Informer() cache.SharedIndexInformer {
-	return c.controller.Informer()
-}
-
-func (c *appRevisionController) GroupVersionKind() schema.GroupVersionKind {
-	return c.gvk
-}
-
-func (c *appRevisionController) Cache() AppRevisionCache {
-	return &appRevisionCache{
-		indexer:  c.Informer().GetIndexer(),
-		resource: c.groupResource,
-	}
-}
-
-func (c *appRevisionController) Create(obj *v3.AppRevision) (*v3.AppRevision, error) {
-	result := &v3.AppRevision{}
-	return result, c.client.Create(context.TODO(), obj.Namespace, obj, result, metav1.CreateOptions{})
-}
-
-func (c *appRevisionController) Update(obj *v3.AppRevision) (*v3.AppRevision, error) {
-	result := &v3.AppRevision{}
-	return result, c.client.Update(context.TODO(), obj.Namespace, obj, result, metav1.UpdateOptions{})
-}
-
-func (c *appRevisionController) UpdateStatus(obj *v3.AppRevision) (*v3.AppRevision, error) {
-	result := &v3.AppRevision{}
-	return result, c.client.UpdateStatus(context.TODO(), obj.Namespace, obj, result, metav1.UpdateOptions{})
-}
-
-func (c *appRevisionController) Delete(namespace, name string, options *metav1.DeleteOptions) error {
-	if options == nil {
-		options = &metav1.DeleteOptions{}
-	}
-	return c.client.Delete(context.TODO(), namespace, name, *options)
-}
-
-func (c *appRevisionController) Get(namespace, name string, options metav1.GetOptions) (*v3.AppRevision, error) {
-	result := &v3.AppRevision{}
-	return result, c.client.Get(context.TODO(), namespace, name, result, options)
-}
-
-func (c *appRevisionController) List(namespace string, opts metav1.ListOptions) (*v3.AppRevisionList, error) {
-	result := &v3.AppRevisionList{}
-	return result, c.client.List(context.TODO(), namespace, result, opts)
-}
-
-func (c *appRevisionController) Watch(namespace string, opts metav1.ListOptions) (watch.Interface, error) {
-	return c.client.Watch(context.TODO(), namespace, opts)
-}
-
-func (c *appRevisionController) Patch(namespace, name string, pt types.PatchType, data []byte, subresources ...string) (*v3.AppRevision, error) {
-	result := &v3.AppRevision{}
-	return result, c.client.Patch(context.TODO(), namespace, name, pt, data, result, metav1.PatchOptions{}, subresources...)
-}
-
-type appRevisionCache struct {
-	indexer  cache.Indexer
-	resource schema.GroupResource
-}
-
-func (c *appRevisionCache) Get(namespace, name string) (*v3.AppRevision, error) {
-	obj, exists, err := c.indexer.GetByKey(namespace + "/" + name)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
-		return nil, errors.NewNotFound(c.resource, name)
-	}
-	return obj.(*v3.AppRevision), nil
-}
-
-func (c *appRevisionCache) List(namespace string, selector labels.Selector) (ret []*v3.AppRevision, err error) {
-
-	err = cache.ListAllByNamespace(c.indexer, namespace, selector, func(m interface{}) {
-		ret = append(ret, m.(*v3.AppRevision))
-	})
-
-	return ret, err
-}
-
-func (c *appRevisionCache) AddIndexer(indexName string, indexer AppRevisionIndexer) {
-	utilruntime.Must(c.indexer.AddIndexers(map[string]cache.IndexFunc{
-		indexName: func(obj interface{}) (strings []string, e error) {
-			return indexer(obj.(*v3.AppRevision))
-		},
-	}))
-}
-
-func (c *appRevisionCache) GetByIndex(indexName, key string) (result []*v3.AppRevision, err error) {
-	objs, err := c.indexer.ByIndex(indexName, key)
-	if err != nil {
-		return nil, err
-	}
-	result = make([]*v3.AppRevision, 0, len(objs))
-	for _, obj := range objs {
-		result = append(result, obj.(*v3.AppRevision))
-	}
-	return result, nil
-}
-
+// AppRevisionStatusHandler is executed for every added or modified AppRevision. Should return the new status to be updated
 type AppRevisionStatusHandler func(obj *v3.AppRevision, status v3.AppRevisionStatus) (v3.AppRevisionStatus, error)
 
+// AppRevisionGeneratingHandler is the top-level handler that is executed for every AppRevision event. It extends AppRevisionStatusHandler by a returning a slice of child objects to be passed to apply.Apply
 type AppRevisionGeneratingHandler func(obj *v3.AppRevision, status v3.AppRevisionStatus) ([]runtime.Object, v3.AppRevisionStatus, error)
 
+// RegisterAppRevisionStatusHandler configures a AppRevisionController to execute a AppRevisionStatusHandler for every events observed.
+// If a non-empty condition is provided, it will be updated in the status conditions for every handler execution
 func RegisterAppRevisionStatusHandler(ctx context.Context, controller AppRevisionController, condition condition.Cond, name string, handler AppRevisionStatusHandler) {
 	statusHandler := &appRevisionStatusHandler{
 		client:    controller,
 		condition: condition,
 		handler:   handler,
 	}
-	controller.AddGenericHandler(ctx, name, FromAppRevisionHandlerToHandler(statusHandler.sync))
+	controller.AddGenericHandler(ctx, name, generic.FromObjectHandlerToHandler(statusHandler.sync))
 }
 
+// RegisterAppRevisionGeneratingHandler configures a AppRevisionController to execute a AppRevisionGeneratingHandler for every events observed, passing the returned objects to the provided apply.Apply.
+// If a non-empty condition is provided, it will be updated in the status conditions for every handler execution
 func RegisterAppRevisionGeneratingHandler(ctx context.Context, controller AppRevisionController, apply apply.Apply,
 	condition condition.Cond, name string, handler AppRevisionGeneratingHandler, opts *generic.GeneratingHandlerOptions) {
 	statusHandler := &appRevisionGeneratingHandler{
@@ -297,6 +89,7 @@ type appRevisionStatusHandler struct {
 	handler   AppRevisionStatusHandler
 }
 
+// sync is executed on every resource addition or modification. Executes the configured handlers and sends the updated status to the Kubernetes API
 func (a *appRevisionStatusHandler) sync(key string, obj *v3.AppRevision) (*v3.AppRevision, error) {
 	if obj == nil {
 		return obj, nil
@@ -342,8 +135,10 @@ type appRevisionGeneratingHandler struct {
 	opts  generic.GeneratingHandlerOptions
 	gvk   schema.GroupVersionKind
 	name  string
+	seen  sync.Map
 }
 
+// Remove handles the observed deletion of a resource, cascade deleting every associated resource previously applied
 func (a *appRevisionGeneratingHandler) Remove(key string, obj *v3.AppRevision) (*v3.AppRevision, error) {
 	if obj != nil {
 		return obj, nil
@@ -353,12 +148,17 @@ func (a *appRevisionGeneratingHandler) Remove(key string, obj *v3.AppRevision) (
 	obj.Namespace, obj.Name = kv.RSplit(key, "/")
 	obj.SetGroupVersionKind(a.gvk)
 
+	if a.opts.UniqueApplyForResourceVersion {
+		a.seen.Delete(key)
+	}
+
 	return nil, generic.ConfigureApplyForObject(a.apply, obj, &a.opts).
 		WithOwner(obj).
 		WithSetID(a.name).
 		ApplyObjects()
 }
 
+// Handle executes the configured AppRevisionGeneratingHandler and pass the resulting objects to apply.Apply, finally returning the new status of the resource
 func (a *appRevisionGeneratingHandler) Handle(obj *v3.AppRevision, status v3.AppRevisionStatus) (v3.AppRevisionStatus, error) {
 	if !obj.DeletionTimestamp.IsZero() {
 		return status, nil
@@ -368,9 +168,41 @@ func (a *appRevisionGeneratingHandler) Handle(obj *v3.AppRevision, status v3.App
 	if err != nil {
 		return newStatus, err
 	}
+	if !a.isNewResourceVersion(obj) {
+		return newStatus, nil
+	}
 
-	return newStatus, generic.ConfigureApplyForObject(a.apply, obj, &a.opts).
+	err = generic.ConfigureApplyForObject(a.apply, obj, &a.opts).
 		WithOwner(obj).
 		WithSetID(a.name).
 		ApplyObjects(objs...)
+	if err != nil {
+		return newStatus, err
+	}
+	a.storeResourceVersion(obj)
+	return newStatus, nil
+}
+
+// isNewResourceVersion detects if a specific resource version was already successfully processed.
+// Only used if UniqueApplyForResourceVersion is set in generic.GeneratingHandlerOptions
+func (a *appRevisionGeneratingHandler) isNewResourceVersion(obj *v3.AppRevision) bool {
+	if !a.opts.UniqueApplyForResourceVersion {
+		return true
+	}
+
+	// Apply once per resource version
+	key := obj.Namespace + "/" + obj.Name
+	previous, ok := a.seen.Load(key)
+	return !ok || previous != obj.ResourceVersion
+}
+
+// storeResourceVersion keeps track of the latest resource version of an object for which Apply was executed
+// Only used if UniqueApplyForResourceVersion is set in generic.GeneratingHandlerOptions
+func (a *appRevisionGeneratingHandler) storeResourceVersion(obj *v3.AppRevision) {
+	if !a.opts.UniqueApplyForResourceVersion {
+		return
+	}
+
+	key := obj.Namespace + "/" + obj.Name
+	a.seen.Store(key, obj.ResourceVersion)
 }

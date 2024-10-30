@@ -5,6 +5,8 @@ import (
 )
 
 // +genclient
+// +kubebuilder:skipversion
+// +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 type PodSecurityAdmissionConfigurationTemplate struct {
@@ -39,52 +41,4 @@ type PodSecurityAdmissionConfigurationTemplateExemptions struct {
 	Usernames      []string `json:"usernames"`
 	RuntimeClasses []string `json:"runtimeClasses"`
 	Namespaces     []string `json:"namespaces"`
-}
-
-func NewPodSecurityAdmissionConfigurationTemplateRestricted() *PodSecurityAdmissionConfigurationTemplate {
-	return &PodSecurityAdmissionConfigurationTemplate{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "restricted",
-		},
-		Description: "The default restricted pod security admission configuration template",
-		Configuration: PodSecurityAdmissionConfigurationTemplateSpec{
-			Defaults: PodSecurityAdmissionConfigurationTemplateDefaults{
-				Enforce:        "restricted",
-				EnforceVersion: "latest",
-				Audit:          "restricted",
-				AuditVersion:   "latest",
-				Warn:           "restricted",
-				WarnVersion:    "latest",
-			},
-			Exemptions: PodSecurityAdmissionConfigurationTemplateExemptions{
-				Usernames:      []string{},
-				RuntimeClasses: []string{},
-				Namespaces:     []string{"ingress-nginx", "kube-system"},
-			},
-		},
-	}
-}
-
-func NewPodSecurityAdmissionConfigurationTemplatePrivileged() *PodSecurityAdmissionConfigurationTemplate {
-	return &PodSecurityAdmissionConfigurationTemplate{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "privileged",
-		},
-		Description: "The default privileged pod security admission configuration template",
-		Configuration: PodSecurityAdmissionConfigurationTemplateSpec{
-			Defaults: PodSecurityAdmissionConfigurationTemplateDefaults{
-				Enforce:        "privileged",
-				EnforceVersion: "latest",
-				Audit:          "privileged",
-				AuditVersion:   "latest",
-				Warn:           "privileged",
-				WarnVersion:    "latest",
-			},
-			Exemptions: PodSecurityAdmissionConfigurationTemplateExemptions{
-				Usernames:      []string{},
-				RuntimeClasses: []string{},
-				Namespaces:     []string{},
-			},
-		},
-	}
 }

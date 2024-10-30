@@ -1,4 +1,5 @@
 variable "access_key" {}
+variable "access_key_name" {}
 variable "availability_zone" {}
 variable "aws_ami" {}
 variable "aws_user" {}
@@ -43,3 +44,4 @@ variable "etcd_cp_nodes" {}
 variable "etcd_worker_nodes" {}
 variable "cp_only_nodes" {}
 variable "cp_worker_nodes" {}
+variable "optional_files" {}

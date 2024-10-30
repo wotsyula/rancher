@@ -44,7 +44,6 @@ func UpdateRefreshCronTime(refreshCronTime string) {
 	parsed, err := ParseCron(refreshCronTime)
 	if err != nil {
 		logrus.Errorf("%v", err)
-		return
 	}
 
 	c.Stop()
@@ -94,7 +93,7 @@ func ParseMaxAge(setting string) (time.Duration, error) {
 	durString := fmt.Sprintf("%vs", setting)
 	dur, err := time.ParseDuration(durString)
 	if err != nil {
-		return 0, fmt.Errorf("Error parsing auth refresh max age: %v", err)
+		return 0, fmt.Errorf("error parsing auth refresh max age: %v", err)
 	}
 	return dur, nil
 }
@@ -105,7 +104,7 @@ func ParseCron(setting string) (cron.Schedule, error) {
 	}
 	schedule, err := cron.ParseStandard(setting)
 	if err != nil {
-		return nil, fmt.Errorf("Error parsing auth refresh cron: %v", err)
+		return nil, fmt.Errorf("error parsing auth refresh cron: %v", err)
 	}
 	return schedule, nil
 }

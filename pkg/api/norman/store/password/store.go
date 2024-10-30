@@ -13,7 +13,7 @@ import (
 	managementschema "github.com/rancher/rancher/pkg/schemas/management.cattle.io/v3"
 	projectschema "github.com/rancher/rancher/pkg/schemas/project.cattle.io/v3"
 	"github.com/rancher/rancher/pkg/types/config"
-	"github.com/rancher/wrangler/pkg/randomtoken"
+	"github.com/rancher/wrangler/v3/pkg/randomtoken"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -61,7 +61,6 @@ func SetPasswordStore(schemas *types.Schemas, secretStore v1.SecretInterface, ns
 	pwdTypes := []string{
 		"clusterlogging",
 		"projectlogging",
-		"globaldnsprovider",
 	}
 
 	for _, storeType := range pwdTypes {

@@ -20,6 +20,7 @@ const (
 	ActiveDirectoryConfigFieldGroupSearchBase              = "groupSearchBase"
 	ActiveDirectoryConfigFieldGroupSearchFilter            = "groupSearchFilter"
 	ActiveDirectoryConfigFieldLabels                       = "labels"
+	ActiveDirectoryConfigFieldLogoutAllSupported           = "logoutAllSupported"
 	ActiveDirectoryConfigFieldName                         = "name"
 	ActiveDirectoryConfigFieldNestedGroupMembershipEnabled = "nestedGroupMembershipEnabled"
 	ActiveDirectoryConfigFieldOwnerReferences              = "ownerReferences"
@@ -29,6 +30,7 @@ const (
 	ActiveDirectoryConfigFieldServiceAccountPassword       = "serviceAccountPassword"
 	ActiveDirectoryConfigFieldServiceAccountUsername       = "serviceAccountUsername"
 	ActiveDirectoryConfigFieldStartTLS                     = "starttls"
+	ActiveDirectoryConfigFieldStatus                       = "status"
 	ActiveDirectoryConfigFieldTLS                          = "tls"
 	ActiveDirectoryConfigFieldType                         = "type"
 	ActiveDirectoryConfigFieldUUID                         = "uuid"
@@ -61,6 +63,7 @@ type ActiveDirectoryConfig struct {
 	GroupSearchBase              string            `json:"groupSearchBase,omitempty" yaml:"groupSearchBase,omitempty"`
 	GroupSearchFilter            string            `json:"groupSearchFilter,omitempty" yaml:"groupSearchFilter,omitempty"`
 	Labels                       map[string]string `json:"labels,omitempty" yaml:"labels,omitempty"`
+	LogoutAllSupported           bool              `json:"logoutAllSupported,omitempty" yaml:"logoutAllSupported,omitempty"`
 	Name                         string            `json:"name,omitempty" yaml:"name,omitempty"`
 	NestedGroupMembershipEnabled *bool             `json:"nestedGroupMembershipEnabled,omitempty" yaml:"nestedGroupMembershipEnabled,omitempty"`
 	OwnerReferences              []OwnerReference  `json:"ownerReferences,omitempty" yaml:"ownerReferences,omitempty"`
@@ -70,6 +73,7 @@ type ActiveDirectoryConfig struct {
 	ServiceAccountPassword       string            `json:"serviceAccountPassword,omitempty" yaml:"serviceAccountPassword,omitempty"`
 	ServiceAccountUsername       string            `json:"serviceAccountUsername,omitempty" yaml:"serviceAccountUsername,omitempty"`
 	StartTLS                     bool              `json:"starttls,omitempty" yaml:"starttls,omitempty"`
+	Status                       *AuthConfigStatus `json:"status,omitempty" yaml:"status,omitempty"`
 	TLS                          bool              `json:"tls,omitempty" yaml:"tls,omitempty"`
 	Type                         string            `json:"type,omitempty" yaml:"type,omitempty"`
 	UUID                         string            `json:"uuid,omitempty" yaml:"uuid,omitempty"`

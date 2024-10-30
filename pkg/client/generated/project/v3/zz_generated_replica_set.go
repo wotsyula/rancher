@@ -8,6 +8,7 @@ const (
 	ReplicaSetType                               = "replicaSet"
 	ReplicaSetFieldActiveDeadlineSeconds         = "activeDeadlineSeconds"
 	ReplicaSetFieldAnnotations                   = "annotations"
+	ReplicaSetFieldAppArmorProfile               = "appArmorProfile"
 	ReplicaSetFieldAutomountServiceAccountToken  = "automountServiceAccountToken"
 	ReplicaSetFieldContainers                    = "containers"
 	ReplicaSetFieldCreated                       = "created"
@@ -40,12 +41,14 @@ const (
 	ReplicaSetFieldRemoved                       = "removed"
 	ReplicaSetFieldReplicaSetConfig              = "replicaSetConfig"
 	ReplicaSetFieldReplicaSetStatus              = "replicaSetStatus"
+	ReplicaSetFieldResourceClaims                = "resourceClaims"
 	ReplicaSetFieldRestartPolicy                 = "restartPolicy"
 	ReplicaSetFieldRunAsGroup                    = "runAsGroup"
 	ReplicaSetFieldRunAsNonRoot                  = "runAsNonRoot"
 	ReplicaSetFieldRuntimeClassName              = "runtimeClassName"
 	ReplicaSetFieldScale                         = "scale"
 	ReplicaSetFieldScheduling                    = "scheduling"
+	ReplicaSetFieldSchedulingGates               = "schedulingGates"
 	ReplicaSetFieldSeccompProfile                = "seccompProfile"
 	ReplicaSetFieldSelector                      = "selector"
 	ReplicaSetFieldServiceAccountName            = "serviceAccountName"
@@ -53,6 +56,7 @@ const (
 	ReplicaSetFieldShareProcessNamespace         = "shareProcessNamespace"
 	ReplicaSetFieldState                         = "state"
 	ReplicaSetFieldSubdomain                     = "subdomain"
+	ReplicaSetFieldSupplementalGroupsPolicy      = "supplementalGroupsPolicy"
 	ReplicaSetFieldSysctls                       = "sysctls"
 	ReplicaSetFieldTerminationGracePeriodSeconds = "terminationGracePeriodSeconds"
 	ReplicaSetFieldTopologySpreadConstraints     = "topologySpreadConstraints"
@@ -71,6 +75,7 @@ type ReplicaSet struct {
 	types.Resource
 	ActiveDeadlineSeconds         *int64                         `json:"activeDeadlineSeconds,omitempty" yaml:"activeDeadlineSeconds,omitempty"`
 	Annotations                   map[string]string              `json:"annotations,omitempty" yaml:"annotations,omitempty"`
+	AppArmorProfile               *AppArmorProfile               `json:"appArmorProfile,omitempty" yaml:"appArmorProfile,omitempty"`
 	AutomountServiceAccountToken  *bool                          `json:"automountServiceAccountToken,omitempty" yaml:"automountServiceAccountToken,omitempty"`
 	Containers                    []Container                    `json:"containers,omitempty" yaml:"containers,omitempty"`
 	Created                       string                         `json:"created,omitempty" yaml:"created,omitempty"`
@@ -103,12 +108,14 @@ type ReplicaSet struct {
 	Removed                       string                         `json:"removed,omitempty" yaml:"removed,omitempty"`
 	ReplicaSetConfig              *ReplicaSetConfig              `json:"replicaSetConfig,omitempty" yaml:"replicaSetConfig,omitempty"`
 	ReplicaSetStatus              *ReplicaSetStatus              `json:"replicaSetStatus,omitempty" yaml:"replicaSetStatus,omitempty"`
+	ResourceClaims                []PodResourceClaim             `json:"resourceClaims,omitempty" yaml:"resourceClaims,omitempty"`
 	RestartPolicy                 string                         `json:"restartPolicy,omitempty" yaml:"restartPolicy,omitempty"`
 	RunAsGroup                    *int64                         `json:"runAsGroup,omitempty" yaml:"runAsGroup,omitempty"`
 	RunAsNonRoot                  *bool                          `json:"runAsNonRoot,omitempty" yaml:"runAsNonRoot,omitempty"`
 	RuntimeClassName              string                         `json:"runtimeClassName,omitempty" yaml:"runtimeClassName,omitempty"`
 	Scale                         *int64                         `json:"scale,omitempty" yaml:"scale,omitempty"`
 	Scheduling                    *Scheduling                    `json:"scheduling,omitempty" yaml:"scheduling,omitempty"`
+	SchedulingGates               []PodSchedulingGate            `json:"schedulingGates,omitempty" yaml:"schedulingGates,omitempty"`
 	SeccompProfile                *SeccompProfile                `json:"seccompProfile,omitempty" yaml:"seccompProfile,omitempty"`
 	Selector                      *LabelSelector                 `json:"selector,omitempty" yaml:"selector,omitempty"`
 	ServiceAccountName            string                         `json:"serviceAccountName,omitempty" yaml:"serviceAccountName,omitempty"`
@@ -116,6 +123,7 @@ type ReplicaSet struct {
 	ShareProcessNamespace         *bool                          `json:"shareProcessNamespace,omitempty" yaml:"shareProcessNamespace,omitempty"`
 	State                         string                         `json:"state,omitempty" yaml:"state,omitempty"`
 	Subdomain                     string                         `json:"subdomain,omitempty" yaml:"subdomain,omitempty"`
+	SupplementalGroupsPolicy      string                         `json:"supplementalGroupsPolicy,omitempty" yaml:"supplementalGroupsPolicy,omitempty"`
 	Sysctls                       []Sysctl                       `json:"sysctls,omitempty" yaml:"sysctls,omitempty"`
 	TerminationGracePeriodSeconds *int64                         `json:"terminationGracePeriodSeconds,omitempty" yaml:"terminationGracePeriodSeconds,omitempty"`
 	TopologySpreadConstraints     []TopologySpreadConstraint     `json:"topologySpreadConstraints,omitempty" yaml:"topologySpreadConstraints,omitempty"`

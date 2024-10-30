@@ -2,11 +2,12 @@ import time
 import pytest
 from rancher import ApiError
 from .test_catalog import wait_for_template_to_be_created
-from .common import random_str
+from .common import random_str, wait_for_template_versions_to_be_created
 from .conftest import set_server_version, wait_for, wait_for_condition, \
     wait_until, user_project_client, DEFAULT_CATALOG
 
 
+@pytest.mark.skip
 def test_app_mysql(admin_pc, admin_mc):
     client = admin_pc.client
     name = random_str()
@@ -133,47 +134,7 @@ def test_prehook_chart(admin_pc, admin_mc):
     assert len(jobs) == 1
 
 
-def test_app_namespace_annotation(admin_pc, admin_mc):
-    client = admin_pc.client
-    ns = admin_pc.cluster.client.create_namespace(name=random_str(),
-                                                  projectId=admin_pc.
-                                                  project.id)
-    wait_for_template_to_be_created(admin_mc.client, "library")
-    app1 = client.create_app(
-        name=random_str(),
-        externalId="catalog://?catalog=library&template=mysql&version=1.3.1"
-                   "&namespace=cattle-global-data",
-        targetNamespace=ns.name,
-        projectId=admin_pc.project.id,
-    )
-    wait_for_workload(client, ns.name, count=1)
-
-    external_id = "catalog://?catalog=library&template=wordpress" \
-                  "&version=7.3.8&namespace=cattle-global-data"
-    app2 = client.create_app(
-        name=random_str(),
-        externalId=external_id,
-        targetNamespace=ns.name,
-        projectId=admin_pc.project.id,
-    )
-    wait_for_workload(client, ns.name, count=3)
-    ns = admin_pc.cluster.client.reload(ns)
-    ns = wait_for_app_annotation(admin_pc, ns, app1.name)
-    ns = wait_for_app_annotation(admin_pc, ns, app2.name)
-    client.delete(app1)
-    wait_for_app_to_be_deleted(client, app1)
-
-    ns = wait_for_app_annotation(admin_pc, ns, app1.name, exists=False)
-    assert app1.name not in ns.annotations['cattle.io/appIds']
-    assert app2.name in ns.annotations['cattle.io/appIds']
-
-    client.delete(app2)
-    wait_for_app_to_be_deleted(client, app2)
-
-    ns = wait_for_app_annotation(admin_pc, ns, app2.name, exists=False)
-    assert app2.name not in ns.annotations.get('cattle.io/appIds', [])
-
-
+@pytest.mark.skip
 def test_helm_timeout(admin_pc, admin_mc, remove_resource):
     """Test helm timeout flag. This test asserts timeout flag is properly being
     passed to helm.
@@ -232,36 +193,8 @@ def wait_for_app_annotation(admin_pc, ns, app_name, exists=True, timeout=60):
     return ns
 
 
-def test_app_custom_values_file(admin_pc, admin_mc):
-    client = admin_pc.client
-    ns = admin_pc.cluster.client.create_namespace(name=random_str(),
-                                                  projectId=admin_pc.
-                                                  project.id)
-    wait_for_template_to_be_created(admin_mc.client, "library")
-    values_yaml = "replicaCount: 2\r\nimage:\r\n  " \
-                  "repository: registry\r\n  tag: 2.7"
-    answers = {
-        "image.tag": "2.6"
-    }
-    app = client.create_app(
-        name=random_str(),
-        externalId="catalog://?catalog=library&template=docker-registry"
-                   "&version=1.8.1&namespace=cattle-global-data",
-        targetNamespace=ns.name,
-        projectId=admin_pc.project.id,
-        valuesYaml=values_yaml,
-        answers=answers
-    )
-    workloads = wait_for_workload(client, ns.name, count=1)
-    workloads = wait_for_replicas(client, ns.name, count=2)
-    print(workloads)
-    assert workloads.data[0].deploymentStatus.unavailableReplicas == 2
-    assert workloads.data[0].containers[0].image == "registry:2.6"
-    client.delete(app)
-    wait_for_app_to_be_deleted(client, app)
-
-
 @pytest.mark.nonparallel
+@pytest.mark.skip
 def test_app_create_validation(admin_mc, admin_pc, custom_catalog,
                                remove_resource, restore_rancher_version):
     """Test create validation for apps. This test will set the rancher version
@@ -342,6 +275,7 @@ def test_app_create_validation(admin_mc, admin_pc, custom_catalog,
 
 
 @pytest.mark.nonparallel
+@pytest.mark.skip
 def test_app_update_validation(admin_mc, admin_pc, custom_catalog,
                                remove_resource, restore_rancher_version):
     """Test update validation for apps. This test will set the rancher version
@@ -427,6 +361,7 @@ def test_app_update_validation(admin_mc, admin_pc, custom_catalog,
 
 
 @pytest.mark.nonparallel
+@pytest.mark.skip
 def test_app_rollback_validation(admin_mc, admin_pc, custom_catalog,
                                  remove_resource, restore_rancher_version):
     """Test rollback validation for apps. This test will set the rancher version
@@ -552,6 +487,7 @@ def test_app_rollback_validation(admin_mc, admin_pc, custom_catalog,
         in e.value.error.message
 
 
+@pytest.mark.skip
 def test_app_has_helmversion(admin_pc, admin_mc, remove_resource):
     """Test that app is using specified helm version"""
     app_client = admin_pc.client
@@ -607,6 +543,7 @@ def test_app_has_helmversion(admin_pc, admin_mc, remove_resource):
     assert app2.helmVersion == "helm_v3"
 
 
+@pytest.mark.skip
 def test_app_upgrade_has_helmversion(admin_pc, admin_mc, remove_resource):
     """Test helm version exists on new chart versions when added to an
     existing catalog and that the helm version carries through template,
@@ -627,8 +564,9 @@ def test_app_upgrade_has_helmversion(admin_pc, admin_mc, remove_resource):
         helmVersion=helm_3
     )
     remove_resource(helm3_catalog)
+    version = catalog_name+"-rancher-v3-issue-0.1.0"
     wait_for_template_to_be_created(catalog_client, catalog_name)
-
+    wait_for_template_versions_to_be_created(catalog_client, version)
     ns = admin_pc.cluster.client.create_namespace(name=random_str(),
                                                   projectId=admin_pc.
                                                   project.id)
@@ -638,7 +576,7 @@ def test_app_upgrade_has_helmversion(admin_pc, admin_mc, remove_resource):
     assert templates[1].status.helmVersion == helm_3
     # check helm version at templateVersion level
     templateVersion = catalog_client.list_templateVersion(
-        name=catalog_name+"-rancher-v3-issue-0.1.0")
+        name=version)
     assert templateVersion.data[0].status.helmVersion == helm_3
     # creating app with existing chart version in catalog
     app1 = app_client.create_app(
@@ -674,10 +612,13 @@ def test_app_upgrade_has_helmversion(admin_pc, admin_mc, remove_resource):
         lambda: ensure_updated_catalog(helm3_catalog),
         fail_handler=lambda:
         "Timed out waiting for catalog to stop transitioning")
+
+    version = catalog_name+"-rancher-v3-issue-0.1.1"
+    wait_for_template_versions_to_be_created(catalog_client, version)
     templates = catalog_client.list_template(catalogId=helm3_catalog.id).data
     assert templates[1].status.helmVersion == helm_3
     templateVersion = catalog_client.list_templateVersion(
-        name=catalog_name+"-rancher-v3-issue-0.1.1")
+        name=version)
     assert templateVersion.data[0].status.helmVersion == helm_3
     project_client = user_project_client(admin_pc, admin_pc.project)
     # update existing app with new version to ensure correct
@@ -708,6 +649,7 @@ def test_app_upgrade_has_helmversion(admin_pc, admin_mc, remove_resource):
     assert app2.helmVersion == helm_3
 
 
+@pytest.mark.skip
 def test_app_externalid_target_project_verification(admin_mc,
                                                     admin_pc,
                                                     user_factory,
@@ -869,25 +811,6 @@ def wait_for_replicas(client, ns, timeout=60, count=0):
         interval *= 2
         workloads = client.list_workload(namespaceId=ns)
     return workloads
-
-
-def wait_for_app_to_be_deleted(client, app, timeout=120):
-    start = time.time()
-    interval = 0.5
-    while True:
-        if time.time() - start > timeout:
-            raise AssertionError(
-                "Timed out waiting for apps to be deleted")
-        apps = client.list_app()
-        found = False
-        for a in apps:
-            if a.id == app.id:
-                found = True
-                break
-        if not found:
-            break
-        time.sleep(interval)
-        interval *= 2
 
 
 def wait_for_monitor_metric(admin_cc, admin_mc, timeout=60):

@@ -63,6 +63,9 @@ spec:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms: {{ include "linux-node-selector-terms" . | nindent 14 }}
       tolerations: {{ include "linux-node-tolerations" . | nindent 8 }}
+{{- if .Values.extraTolerations }}
+{{ toYaml .Values.extraTolerations | indent 8 }}
+{{- end }}
       containers:
       - image: {{ .Values.rancherImage }}:{{ default .Chart.AppVersion .Values.rancherImageTag }}
         imagePullPolicy: {{ default "IfNotPresent" .Values.rancherImagePullPolicy }}
@@ -140,21 +143,40 @@ spec:
               name: "bootstrap-secret"
               key: "bootstrapPassword"
 {{- end }}
+{{- if .Values.agentTLSMode }}
+        - name: CATTLE_AGENT_TLS_MODE
+          value: "{{ .Values.agentTLSMode }}"
+{{- end }}
 {{- if .Values.extraEnv }}
 {{ toYaml .Values.extraEnv | indent 8}}
 {{- end }}
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: 80
+          timeoutSeconds: {{ .Values.startupProbe.timeoutSeconds }}
+          failureThreshold: {{ .Values.startupProbe.failureThreshold }}
+          periodSeconds: {{ .Values.startupProbe.periodSeconds }}
         livenessProbe:
           httpGet:
             path: /healthz
             port: 80
-          initialDelaySeconds: 60
-          periodSeconds: 30
+          {{- with .Values.livenessProbe.initialDelaySeconds}}
+          initialDelaySeconds: {{ . }}
+          {{- end }}
+          timeoutSeconds: {{.Values.livenessProbe.timeoutSeconds }}
+          periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+          failureThreshold: {{.Values.livenessProbe.failureThreshold }}
         readinessProbe:
           httpGet:
             path: /healthz
             port: 80
-          initialDelaySeconds: 5
-          periodSeconds: 30
+          {{- with .Values.readinessProbe.initialDelaySeconds}}
+          initialDelaySeconds: {{ . }}
+          {{- end }}
+          timeoutSeconds: {{.Values.readinessProbe.timeoutSeconds }}
+          periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+          failureThreshold: {{.Values.readinessProbe.failureThreshold }}
         resources:
 {{ toYaml .Values.resources | indent 10 }}
         volumeMounts:
@@ -191,16 +213,8 @@ spec:
 {{- if eq .Values.auditLog.destination "sidecar" }}
   {{- if gt (int .Values.auditLog.level) 0 }}
       # Make audit logs available for Rancher log collector tools.
-      {{- if .Values.busyboxImage }}
-      - image: {{ .Values.busyboxImage}}
-      {{- else }}
-      - image: {{ .Values.auditLog.image.repository }}:{{.Values.auditLog.image.tag}}
-      {{- end }}
-      {{- if .Values.busyboxImagePullPolicy }}
-        imagePullPolicy: {{ .Values.busyboxImagePullPolicy }}
-      {{- else }}
-        imagePullPolicy: {{ .Values.auditLog.image.pullPolicy }}
-      {{- end }}
+      - image: {{ include "auditLog_image" . }}
+        imagePullPolicy: {{ default .Values.auditLog.image.pullPolicy .Values.busyboxImagePullPolicy }}
         name: {{ template "rancher.name" . }}-audit-log
         command: ["tail"]
         args: ["-F", "/var/log/auditlog/rancher-api-audit.log"]

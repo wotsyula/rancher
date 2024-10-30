@@ -20,6 +20,7 @@ const (
 	NodeFieldDockerInfo           = "dockerInfo"
 	NodeFieldEtcd                 = "etcd"
 	NodeFieldExternalIPAddress    = "externalIpAddress"
+	NodeFieldFeatures             = "features"
 	NodeFieldHostname             = "hostname"
 	NodeFieldIPAddress            = "ipAddress"
 	NodeFieldImported             = "imported"
@@ -41,6 +42,7 @@ const (
 	NodeFieldRemoved              = "removed"
 	NodeFieldRequested            = "requested"
 	NodeFieldRequestedHostname    = "requestedHostname"
+	NodeFieldRuntimeHandlers      = "runtimeHandlers"
 	NodeFieldScaledownTime        = "scaledownTime"
 	NodeFieldSshUser              = "sshUser"
 	NodeFieldState                = "state"
@@ -70,6 +72,7 @@ type Node struct {
 	DockerInfo           *DockerInfo               `json:"dockerInfo,omitempty" yaml:"dockerInfo,omitempty"`
 	Etcd                 bool                      `json:"etcd,omitempty" yaml:"etcd,omitempty"`
 	ExternalIPAddress    string                    `json:"externalIpAddress,omitempty" yaml:"externalIpAddress,omitempty"`
+	Features             *NodeFeatures             `json:"features,omitempty" yaml:"features,omitempty"`
 	Hostname             string                    `json:"hostname,omitempty" yaml:"hostname,omitempty"`
 	IPAddress            string                    `json:"ipAddress,omitempty" yaml:"ipAddress,omitempty"`
 	Imported             bool                      `json:"imported,omitempty" yaml:"imported,omitempty"`
@@ -91,6 +94,7 @@ type Node struct {
 	Removed              string                    `json:"removed,omitempty" yaml:"removed,omitempty"`
 	Requested            map[string]string         `json:"requested,omitempty" yaml:"requested,omitempty"`
 	RequestedHostname    string                    `json:"requestedHostname,omitempty" yaml:"requestedHostname,omitempty"`
+	RuntimeHandlers      []NodeRuntimeHandler      `json:"runtimeHandlers,omitempty" yaml:"runtimeHandlers,omitempty"`
 	ScaledownTime        string                    `json:"scaledownTime,omitempty" yaml:"scaledownTime,omitempty"`
 	SshUser              string                    `json:"sshUser,omitempty" yaml:"sshUser,omitempty"`
 	State                string                    `json:"state,omitempty" yaml:"state,omitempty"`
